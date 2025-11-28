@@ -1,0 +1,166 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15-alpine
+    container_name: truelift-postgres
+    environment:
+      POSTGRES_DB: truelift
+      POSTGRES_USER: truelift_user
+      POSTGRES_PASSWORD: truelift_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./infrastructure/init.sql:/docker-entrypoint-initdb.d/init.sql
+    networks:
+      - truelift-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: truelift-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - truelift-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: truelift-zookeeper
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - truelift-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: truelift-kafka
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+      - "9094:9094"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9094
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - truelift-network
+
+  virtual-shoppers:
+    build:
+      context: ./services/virtual-shoppers
+      dockerfile: Dockerfile
+    container_name: truelift-virtual-shoppers
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - kafka
+      - redis
+    networks:
+      - truelift-network
+
+  ml-detector:
+    build:
+      context: ./services/ml-detector
+      dockerfile: Dockerfile
+    container_name: truelift-ml-detector
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: truelift
+      POSTGRES_USER: truelift_user
+      POSTGRES_PASSWORD: truelift_pass
+      MODEL_PATH: /app/models
+    depends_on:
+      - kafka
+      - postgres
+    volumes:
+      - ./ml-models:/app/models
+    networks:
+      - truelift-network
+
+  gemini-agent:
+    build:
+      context: ./services/gemini-agent
+      dockerfile: Dockerfile
+    container_name: truelift-gemini-agent
+    environment:
+      GEMINI_API_KEY: ${GEMINI_API_KEY}
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: truelift
+      POSTGRES_USER: truelift_user
+      POSTGRES_PASSWORD: truelift_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - truelift-network
+
+  backend-api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: truelift-backend
+    ports:
+      - "8000:8000"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: truelift
+      POSTGRES_USER: truelift_user
+      POSTGRES_PASSWORD: truelift_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+    depends_on:
+      - postgres
+      - redis
+      - kafka
+    networks:
+      - truelift-network
+
+  feedback-loop:
+    build:
+      context: ./services/feedback-loop
+      dockerfile: Dockerfile
+    container_name: truelift-feedback-loop
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: truelift
+      POSTGRES_USER: truelift_user
+      POSTGRES_PASSWORD: truelift_pass
+    depends_on:
+      - kafka
+      - postgres
+    networks:
+      - truelift-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: truelift-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8000
+    depends_on:
+      - backend-api
+    networks:
+      - truelift-network
+
+volumes:
+  postgres_data:
+
+networks:
+  truelift-network:
+    driver: bridge
