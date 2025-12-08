@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timedelta
 from collections import defaultdict
 from typing import Dict, List
+from decimal import Decimal
 from kafka import KafkaConsumer, KafkaProducer
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -13,6 +14,13 @@ import pickle
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def decimal_to_float(obj):
+    """Convert Decimal objects to float for JSON serialization"""
+    if isinstance(obj, Decimal):
+        return float(obj)
+    return obj
 
 
 class SalesAggregator:
@@ -52,12 +60,21 @@ class CannibalizationDetector:
             bootstrap_servers=self.kafka_bootstrap_servers,
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
             group_id='ml-detector-group',
-            auto_offset_reset='latest'
+            auto_offset_reset='latest',
+            enable_auto_commit=True,
+            auto_commit_interval_ms=1000,
+            session_timeout_ms=30000,
+            heartbeat_interval_ms=10000,
+            max_poll_interval_ms=300000,
+            max_poll_records=10
         )
         
         self.producer = KafkaProducer(
             bootstrap_servers=self.kafka_bootstrap_servers,
-            value_serializer=lambda v: json.dumps(v).encode('utf-8')
+            value_serializer=lambda v: json.dumps(v).encode('utf-8'),
+            acks='all',
+            retries=3,
+            max_in_flight_requests_per_connection=1
         )
         
         self.aggregator = SalesAggregator(window_minutes=1)
@@ -132,10 +149,14 @@ class CannibalizationDetector:
         if not promo_data:
             return {}
         
-        predicted_sales_per_minute = promo_data['predicted_sales'] / (7 * 24 * 60)
+        # Convert Decimal to float for calculations
+        predicted_sales = float(promo_data['predicted_sales'])
+        promo_price = float(promo_data['promo_price'])
+        
+        predicted_sales_per_minute = predicted_sales / (7 * 24 * 60)
         sales_difference = int(predicted_sales_per_minute - actual_sales)
         loss_percentage = (sales_difference / predicted_sales_per_minute * 100) if predicted_sales_per_minute > 0 else 0
-        loss_amount = sales_difference * promo_data['promo_price']
+        loss_amount = sales_difference * promo_price
         
         return {
             'actual_sales': actual_sales,
@@ -149,6 +170,9 @@ class CannibalizationDetector:
         promo_data = self._fetch_promotion_data(promo_id)
         if not promo_data:
             return
+        
+        # Convert Decimal to float for JSON serialization
+        promo_data = {k: decimal_to_float(v) for k, v in promo_data.items()}
         
         alert_data = {
             'alert_id': f"ALERT-{promo_id}-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}",
@@ -185,9 +209,15 @@ class CannibalizationDetector:
         finally:
             conn.close()
         
-        self.producer.send('cannibalization-alerts', value=alert_data)
-        logger.warning(f"🚨 CANNIBALIZATION DETECTED: {alert_data['product_name']} - "
-                      f"Loss: {alert_data['loss_percentage']}% (${alert_data['loss_amount']})")
+        # Send to Kafka with error handling
+        try:
+            future = self.producer.send('cannibalization-alerts', value=alert_data)
+            future.get(timeout=10)  # Wait for confirmation
+            self.producer.flush()  # Ensure message is sent
+            logger.warning(f"🚨 CANNIBALIZATION DETECTED & PUBLISHED: {alert_data['product_name']} - "
+                          f"Loss: {alert_data['loss_percentage']}% (${alert_data['loss_amount']})")
+        except Exception as e:
+            logger.error(f"Failed to publish alert to Kafka: {e}")
 
     def process_events(self):
         logger.info("Starting ML Cannibalization Detector...")

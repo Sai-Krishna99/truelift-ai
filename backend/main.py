@@ -135,15 +135,26 @@ async def get_alerts(status: Optional[str] = None, limit: int = 50):
                     LIMIT %s
                 """, (status, limit))
             else:
+                # Prioritize showing alerts with strategies, then pending
                 cursor.execute("""
                     SELECT * FROM cannibalization_alerts 
-                    ORDER BY alert_timestamp DESC 
+                    ORDER BY 
+                        CASE 
+                            WHEN status = 'strategy_generated' THEN 1
+                            WHEN status = 'pending' THEN 2
+                            WHEN status = 'action_taken' THEN 3
+                            ELSE 4
+                        END,
+                        alert_timestamp DESC 
                     LIMIT %s
                 """, (limit,))
             
             alerts = cursor.fetchall()
             
             for alert in alerts:
+                if 'alert_timestamp' in alert and alert['alert_timestamp']:
+                    alert['alert_timestamp'] = alert['alert_timestamp'].isoformat()
+                
                 strategy_json = redis_client.get(f"strategy:{alert['alert_id']}")
                 if strategy_json:
                     alert['strategy'] = json.loads(strategy_json)
@@ -171,11 +182,17 @@ async def get_alert(alert_id: str):
             
             alert_dict = dict(alert)
             
+            # Convert datetime to ISO string
+            if 'alert_timestamp' in alert_dict and alert_dict['alert_timestamp']:
+                alert_dict['alert_timestamp'] = alert_dict['alert_timestamp'].isoformat()
+            
             if alert_dict.get('recommended_action'):
+                recommended = alert_dict.pop('recommended_action')
+                alternatives = alert_dict.pop('alternative_actions')
                 alert_dict['strategy'] = {
                     'explanation': alert_dict.pop('explanation'),
-                    'primary_recommendation': json.loads(alert_dict.pop('recommended_action')),
-                    'alternatives': json.loads(alert_dict.pop('alternative_actions')),
+                    'primary_recommendation': recommended if isinstance(recommended, dict) else json.loads(recommended),
+                    'alternatives': alternatives if isinstance(alternatives, list) else json.loads(alternatives),
                     'confidence_score': float(alert_dict.pop('confidence_score'))
                 }
             

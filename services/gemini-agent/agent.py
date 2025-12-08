@@ -32,7 +32,13 @@ class GeminiStrategyAgent:
             bootstrap_servers=self.kafka_bootstrap_servers,
             value_deserializer=lambda m: json.loads(m.decode('utf-8')),
             group_id='gemini-agent-group',
-            auto_offset_reset='latest'
+            auto_offset_reset='latest',
+            enable_auto_commit=True,
+            auto_commit_interval_ms=1000,
+            session_timeout_ms=30000,
+            heartbeat_interval_ms=10000,
+            max_poll_interval_ms=300000,
+            max_poll_records=5
         )
         
         self.redis_client = redis.Redis(
@@ -215,22 +221,27 @@ Provide actionable, data-driven recommendations."""
         logger.info("Starting Gemini Strategy Agent...")
         
         for message in self.consumer:
-            alert_data = message.value
-            alert_id = alert_data['alert_id']
-            
-            logger.info(f"Processing alert: {alert_id}")
-            
-            context = self._fetch_alert_context(alert_data)
-            
-            prompt = self._generate_gemini_prompt(context)
-            
-            strategy = self._query_gemini(prompt)
-            
-            self._store_strategy(alert_id, strategy)
-            
-            self._update_alert_status(alert_id, 'strategy_generated')
-            
-            logger.info(f"✓ Strategy generated: {strategy['primary_recommendation']['action']}")
+            try:
+                alert_data = message.value
+                alert_id = alert_data['alert_id']
+                
+                logger.info(f"Processing alert: {alert_id}")
+                
+                context = self._fetch_alert_context(alert_data)
+                
+                prompt = self._generate_gemini_prompt(context)
+                
+                strategy = self._query_gemini(prompt)
+                
+                self._store_strategy(alert_id, strategy)
+                
+                self._update_alert_status(alert_id, 'strategy_generated')
+                
+                logger.info(f"✓ Strategy generated for {alert_id}: {strategy['primary_recommendation']['action']}")
+            except Exception as e:
+                logger.error(f"Error processing alert {alert_data.get('alert_id', 'unknown')}: {e}", exc_info=True)
+                # Continue processing next message even if this one fails
+                continue
 
     def run(self):
         try:

@@ -3,7 +3,6 @@
 import { useState, useEffect } from 'react';
 import axios from 'axios';
 import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle } from 'lucide-react';
-import { format } from 'date-fns';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -68,6 +67,16 @@ export default function Home() {
     } catch (error) {
       console.error('Error fetching data:', error);
       setLoading(false);
+    }
+  };
+
+  const handleAlertClick = async (alert: Alert) => {
+    try {
+      // Fetch full alert details with strategy
+      const response = await axios.get(`${API_URL}/alerts/${alert.alert_id}`);
+      setSelectedAlert(response.data);
+    } catch (error) {
+      console.error('Error fetching alert details:', error);
     }
   };
 
@@ -186,8 +195,8 @@ export default function Home() {
               </div>
             ) : (
               alerts.map((alert) => (
-                <div key={alert.alert_id} className="px-6 py-4 hover:bg-gray-50 cursor-pointer"
-                     onClick={() => setSelectedAlert(alert)}>
+                <div key={alert.alert_id} className="px-6 py-4 hover:bg-gray-50 cursor-pointer transition-colors"
+                     onClick={() => handleAlertClick(alert)}>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
                       <div className="flex items-center gap-3 mb-2">
@@ -222,7 +231,7 @@ export default function Home() {
                       </div>
                       
                       <p className="text-xs text-gray-500 mt-3">
-                        {format(new Date(alert.alert_timestamp), 'MMM dd, yyyy HH:mm:ss')}
+                        {new Date(alert.alert_timestamp).toLocaleString()}
                       </p>
                     </div>
                   </div>
@@ -275,7 +284,7 @@ export default function Home() {
                     ))}
                   </div>
 
-                  {selectedAlert.status === 'pending' && (
+                  {selectedAlert.status !== 'action_taken' && selectedAlert.status !== 'resolved' && (
                     <div className="flex gap-3 pt-4 border-t">
                       <button
                         onClick={() => handleAction(selectedAlert.alert_id, selectedAlert.promo_id, 'stop_promotion')}
