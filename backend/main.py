@@ -345,6 +345,25 @@ async def get_feedback(limit: int = 20):
         conn.close()
 
 
+@app.get("/actions/recent")
+async def get_recent_actions(limit: int = 10):
+    conn = get_db_connection()
+    try:
+        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            cursor.execute("""
+                SELECT ua.*, ca.product_name, p.promo_price, p.original_price
+                FROM user_actions ua
+                JOIN cannibalization_alerts ca ON ua.alert_id = ca.alert_id
+                LEFT JOIN promotions p ON ua.promo_id = p.promo_id
+                ORDER BY ua.action_timestamp DESC
+                LIMIT %s
+            """, (limit,))
+            
+            return [dict(row) for row in cursor.fetchall()]
+    finally:
+        conn.close()
+
+
 @app.websocket("/ws")
 async def websocket_endpoint(websocket: WebSocket):
     await manager.connect(websocket)
@@ -353,6 +372,21 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
+
+
+@app.post("/internal/broadcast-alert")
+async def broadcast_alert(alert_data: dict):
+    """Internal endpoint for services to broadcast new alerts to WebSocket clients"""
+    try:
+        await manager.broadcast({
+            'type': 'new_alert',
+            'data': alert_data
+        })
+        logger.info(f"Broadcasted alert {alert_data.get('alert_id')} to {len(manager.active_connections)} clients")
+        return {"status": "broadcasted", "clients": len(manager.active_connections)}
+    except Exception as e:
+        logger.error(f"Error broadcasting alert: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

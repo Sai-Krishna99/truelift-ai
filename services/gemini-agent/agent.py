@@ -8,6 +8,7 @@ from psycopg2.extras import RealDictCursor
 import redis
 import google.generativeai as genai
 from datetime import datetime
+import requests
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -220,6 +221,8 @@ Provide actionable, data-driven recommendations."""
     def process_alerts(self):
         logger.info("Starting Gemini Strategy Agent...")
         
+        backend_url = os.getenv('BACKEND_URL', 'http://backend-api:8000')
+        
         for message in self.consumer:
             try:
                 alert_data = message.value
@@ -236,6 +239,22 @@ Provide actionable, data-driven recommendations."""
                 self._store_strategy(alert_id, strategy)
                 
                 self._update_alert_status(alert_id, 'strategy_generated')
+                
+                # Broadcast new alert to all WebSocket clients
+                try:
+                    broadcast_data = {
+                        **alert_data,
+                        'strategy': strategy,
+                        'status': 'strategy_generated'
+                    }
+                    requests.post(
+                        f"{backend_url}/internal/broadcast-alert",
+                        json=broadcast_data,
+                        timeout=2
+                    )
+                    logger.info(f"Broadcasted alert {alert_id} via WebSocket")
+                except Exception as broadcast_error:
+                    logger.warning(f"Failed to broadcast alert: {broadcast_error}")
                 
                 logger.info(f"✓ Strategy generated for {alert_id}: {strategy['primary_recommendation']['action']}")
             except Exception as e:
