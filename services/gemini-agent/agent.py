@@ -6,7 +6,7 @@ from kafka import KafkaConsumer
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import redis
-import google.generativeai as genai
+from google import genai
 from datetime import datetime
 import requests
 
@@ -25,8 +25,7 @@ class GeminiStrategyAgent:
             'password': os.getenv('POSTGRES_PASSWORD', 'truelift_pass')
         }
         
-        genai.configure(api_key=self.gemini_api_key)
-        self.model = genai.GenerativeModel('gemini-pro')
+        self.client = genai.Client(api_key=self.gemini_api_key)
         
         self.consumer = KafkaConsumer(
             'cannibalization-alerts',
@@ -136,7 +135,10 @@ Provide actionable, data-driven recommendations."""
 
     def _query_gemini(self, prompt: str) -> Dict:
         try:
-            response = self.model.generate_content(prompt)
+            response = self.client.models.generate_content(
+                model='gemini-2.5-flash',
+                contents=prompt
+            )
             response_text = response.text.strip()
             
             if response_text.startswith('```json'):
