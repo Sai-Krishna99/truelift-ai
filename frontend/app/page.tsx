@@ -87,6 +87,11 @@ export default function Home() {
 
         if (message.type === 'action_taken' || message.type === 'new_alert') {
           fetchData();
+          if (message.type === 'action_taken') {
+            const { alert_id, status } = message.data || {};
+            setAlerts(prev => prev.map(a => a.alert_id === alert_id ? { ...a, status: status || 'resolved' } : a));
+            setSelectedAlert(prev => prev && prev.alert_id === alert_id ? { ...prev, status: status || 'resolved' } : prev);
+          }
         }
       };
 
@@ -146,16 +151,13 @@ export default function Home() {
         performed_by: 'manager'
       });
 
+      setSelectedAlert(prev => prev ? { ...prev, status: 'resolved' } : prev);
       setActionResult({
         message: `Action "${actionType}" executed successfully! ${response.data.message}`,
         type: 'success'
       });
 
-      setTimeout(() => {
-        setSelectedAlert(null);
-        setActionResult(null);
-        fetchData();
-      }, 2000);
+      fetchData();
 
     } catch (error: any) {
       console.error('Error executing action:', error);
@@ -176,6 +178,19 @@ export default function Home() {
         return 'bg-yellow-100 text-yellow-800 border-yellow-300';
       default:
         return 'bg-blue-100 text-blue-800 border-blue-300';
+    }
+  };
+
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'action_taken':
+        return 'bg-amber-100 text-amber-800 border border-amber-200';
+      case 'resolved':
+        return 'bg-green-100 text-green-800 border border-green-200';
+      case 'strategy_generated':
+        return 'bg-blue-100 text-blue-800 border border-blue-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border border-gray-200';
     }
   };
 
@@ -295,11 +310,12 @@ export default function Home() {
                   <select
                     value={statusFilter}
                     onChange={(e) => { setStatusFilter(e.target.value); setCurrentPage(1); }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900"
                   >
                     <option value="all">All Statuses</option>
                     <option value="pending">Pending</option>
                     <option value="strategy_generated">Strategy Generated</option>
+                    <option value="action_taken">Action Taken</option>
                     <option value="resolved">Resolved</option>
                   </select>
                 </div>
@@ -308,7 +324,7 @@ export default function Home() {
                   <select
                     value={severityFilter}
                     onChange={(e) => { setSeverityFilter(e.target.value); setCurrentPage(1); }}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white text-gray-900"
                   >
                     <option value="all">All Severities</option>
                     <option value="high">High</option>
@@ -354,6 +370,7 @@ export default function Home() {
                         </span>
                         <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'resolved' ? 'bg-green-100 text-green-800' :
                           alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
+                          alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
                           {alert.status.replace('_', ' ').toUpperCase()}
@@ -421,7 +438,12 @@ export default function Home() {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg max-w-3xl w-full max-h-[90vh] overflow-y-auto">
             <div className="px-6 py-4 border-b flex items-center justify-between">
-              <h3 className="text-xl font-semibold text-gray-900">Alert Details & AI Strategy</h3>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xl font-semibold text-gray-900">Alert Details & AI Strategy</h3>
+                <span className={`px-3 py-1 text-xs font-semibold rounded-full ${getStatusBadge(selectedAlert.status)}`}>
+                  {selectedAlert.status.replace('_', ' ').toUpperCase()}
+                </span>
+              </div>
               <button onClick={() => setSelectedAlert(null)} className="text-gray-400 hover:text-gray-600">
                 <XCircle className="w-6 h-6" />
               </button>
@@ -465,7 +487,7 @@ export default function Home() {
                         <p className="text-xs text-gray-600 mt-1">{alt.details}</p>
                       </div>
                     ))}
-                  </div>
+                      </div>
 
                   {selectedAlert.status === 'pending' || selectedAlert.status === 'strategy_generated' ? (
                     <div className="pt-4 border-t">
@@ -499,6 +521,18 @@ export default function Home() {
                         Actions will be published to Kafka and processed by the feedback loop system
                       </p>
                     </div>
+                  ) : selectedAlert.status === 'action_taken' ? (
+                    <div className="pt-4 border-t">
+                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
+                        <div className="flex items-center justify-center gap-2 text-amber-800 font-medium">
+                          <RefreshCw className="w-4 h-4 animate-spin" />
+                          <span>Action recorded — processing</span>
+                        </div>
+                        <p className="text-xs text-amber-700 mt-2">
+                          Feedback loop will update effectiveness once enough events arrive.
+                        </p>
+                      </div>
+                    </div>
                   ) : (
                     <div className="pt-4 border-t">
                       <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
@@ -507,6 +541,41 @@ export default function Home() {
                       </div>
                     </div>
                   )}
+
+                  <div className="pt-6 border-t mt-6">
+                    <div className="flex items-center justify-between mb-3">
+                      <h5 className="font-semibold text-gray-900">📜 Recent Actions</h5>
+                      <button
+                        onClick={() => setShowActionHistory(!showActionHistory)}
+                        className="text-sm text-blue-600 hover:text-blue-700"
+                      >
+                        {showActionHistory ? 'Hide' : 'Show'}
+                      </button>
+                    </div>
+                    {showActionHistory && (
+                      <div className="space-y-2">
+                        {recentActions
+                          .filter(a => a.alert_id === selectedAlert.alert_id || a.promo_id === selectedAlert.promo_id)
+                          .slice(0, 5)
+                          .map((action, idx) => (
+                            <div key={`${action.action_id}-${idx}`} className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm">
+                              <div className="flex items-center justify-between">
+                                <span className="font-medium text-gray-800">{action.action_type.replace('_', ' ')}</span>
+                                <span className="text-xs text-gray-500">
+                                  {new Date(action.action_timestamp || action.timestamp).toLocaleString()}
+                                </span>
+                              </div>
+                              <div className="text-xs text-gray-600 mt-1">
+                                {action.product_name ? `${action.product_name} (${action.promo_id})` : action.promo_id}
+                              </div>
+                            </div>
+                          ))}
+                        {recentActions.filter(a => a.alert_id === selectedAlert.alert_id || a.promo_id === selectedAlert.promo_id).length === 0 && (
+                          <p className="text-sm text-gray-600">No actions recorded for this alert yet.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
             </div>

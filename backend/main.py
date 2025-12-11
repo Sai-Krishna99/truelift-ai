@@ -264,7 +264,8 @@ async def create_user_action(action: UserActionRequest):
             'alert_id': action.alert_id,
             'promo_id': action.promo_id,
             'action_type': action.action_type,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.utcnow().isoformat(),
+            'status': 'resolved'
         }
         kafka_producer.send('user-actions', value=feedback_data)
         
