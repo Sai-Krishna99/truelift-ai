@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle, Filter, ChevronLeft, ChevronRight, RefreshCw } from 'lucide-react';
+import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle, Filter, ChevronLeft, ChevronRight, RefreshCw, Zap } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_URL = API_URL.replace('http', 'ws') + '/ws';
@@ -18,6 +18,9 @@ interface Alert {
   severity: string;
   status: string;
   alert_timestamp: string;
+  burst_id?: string;
+  demo_queued_at?: string;
+  burst_event_count?: number;
   strategy?: {
     explanation: string;
     primary_recommendation: {
@@ -60,6 +63,8 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const [recentActions, setRecentActions] = useState<any[]>([]);
   const [showActionHistory, setShowActionHistory] = useState(false);
+  const [demoLoading, setDemoLoading] = useState(false);
+  const [demoResult, setDemoResult] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
 
   useEffect(() => {
     fetchData();
@@ -175,6 +180,21 @@ export default function Home() {
     }
   };
 
+  const handleDemoBurst = async (burstSize: number = 6) => {
+    setDemoLoading(true);
+    setDemoResult(null);
+    try {
+      const resp = await axios.post(`${API_URL}/demo/trigger`, { burst_size: burstSize });
+      const burstId = resp.data?.burst_id ? ` (${resp.data.burst_id})` : '';
+      setDemoResult({ message: `Demo burst queued${burstId ? burstId : ''} (${burstSize} batches)`, type: 'success' });
+    } catch (error: any) {
+      console.error('Error triggering demo burst:', error);
+      setDemoResult({ message: `Failed to start demo: ${error.response?.data?.detail || error.message}`, type: 'error' });
+    } finally {
+      setDemoLoading(false);
+    }
+  };
+
   const getSeverityColor = (severity: string) => {
     switch (severity) {
       case 'high':
@@ -202,6 +222,31 @@ const getStatusBadge = (status: string) => {
     if (severityFilter !== 'all' && alert.severity !== severityFilter) return false;
     return true;
   });
+
+  const isDemoAlert = (alert: Alert) => {
+    return Boolean(alert.burst_id);
+  };
+
+  const formatDemoLabel = (alert: Alert) => {
+    if (!isDemoAlert(alert)) return null;
+    if (alert.burst_event_count && alert.burst_event_count > 0) {
+      return `DEMO • ${alert.burst_event_count} events`;
+    }
+    return 'DEMO';
+  };
+
+  const formatTimestamp = (value: string) => {
+    const date = new Date(value);
+    return date.toLocaleString(undefined, {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    });
+  };
 
   const totalPages = Math.ceil(filteredAlerts.length / itemsPerPage);
   const paginatedAlerts = filteredAlerts.slice(
@@ -231,6 +276,14 @@ const getStatusBadge = (status: string) => {
             </div>
             <div className="flex items-center gap-4">
               <button
+                onClick={() => handleDemoBurst(6)}
+                disabled={demoLoading}
+                className="flex items-center gap-2 px-3 py-2 bg-amber-50 text-amber-700 rounded-lg hover:bg-amber-100 transition disabled:opacity-50"
+              >
+                {demoLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
+                <span className="text-sm font-medium">Start Demo</span>
+              </button>
+              <button
                 onClick={fetchData}
                 className="flex items-center gap-2 px-3 py-2 bg-blue-50 text-blue-600 rounded-lg hover:bg-blue-100 transition"
               >
@@ -245,6 +298,14 @@ const getStatusBadge = (status: string) => {
           </div>
         </div>
       </header>
+
+      {demoResult && (
+        <div className={`mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-3`}>
+          <div className={`${demoResult.type === 'success' ? 'bg-amber-50 border border-amber-200 text-amber-800' : 'bg-red-50 border border-red-200 text-red-800'} rounded-lg px-4 py-3 text-sm`}>
+            {demoResult.message}
+          </div>
+        </div>
+      )}
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -365,13 +426,18 @@ const getStatusBadge = (status: string) => {
                   onClick={() => handleAlertClick(alert)}>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                      <div className="flex items-center gap-3 mb-2">
-                        <h3 className="text-lg font-semibold text-gray-900">{alert.product_name}</h3>
-                        <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
-                          {alert.severity.toUpperCase()}
+                    <div className="flex items-center gap-3 mb-2">
+                      <h3 className="text-lg font-semibold text-gray-900">{alert.product_name}</h3>
+                      {isDemoAlert(alert) && (
+                        <span className="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                          {formatDemoLabel(alert)}
                         </span>
-                        <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
-                          alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
+                      )}
+                      <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
+                        {alert.severity.toUpperCase()}
+                      </span>
+                      <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
+                        alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
                           {alert.status.replace('_', ' ').toUpperCase()}
@@ -398,7 +464,7 @@ const getStatusBadge = (status: string) => {
                       </div>
 
                       <p className="text-xs text-gray-500 mt-3">
-                        {new Date(alert.alert_timestamp).toLocaleString()}
+                        {formatTimestamp(alert.alert_timestamp)}
                       </p>
                     </div>
                   </div>
@@ -454,6 +520,7 @@ const getStatusBadge = (status: string) => {
               <div className="mb-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-2">{selectedAlert.product_name}</h4>
                 <p className="text-sm text-gray-600">Promo ID: {selectedAlert.promo_id}</p>
+                <p className="text-xs text-gray-500 mt-1">Alerted: {formatTimestamp(selectedAlert.alert_timestamp)}</p>
               </div>
 
               {actionResult && (

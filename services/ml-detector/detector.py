@@ -1,7 +1,7 @@
 import json
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from typing import Dict, List
 from decimal import Decimal
@@ -11,6 +11,7 @@ from psycopg2.extras import RealDictCursor
 import numpy as np
 from sklearn.ensemble import IsolationForest
 import pickle
+import redis
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -54,6 +55,11 @@ class CannibalizationDetector:
             'user': os.getenv('POSTGRES_USER', 'truelift_user'),
             'password': os.getenv('POSTGRES_PASSWORD', 'truelift_pass')
         }
+        self.redis_client = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            decode_responses=True
+        )
         
         self.consumer = KafkaConsumer(
             'shopping-events',
@@ -131,7 +137,8 @@ class CannibalizationDetector:
         if not promo_data:
             return False
         
-        predicted_sales_per_minute = promo_data['predicted_sales'] / (7 * 24 * 60)
+        # Treat predicted_sales as per-minute baseline for simplicity in demo
+        predicted_sales_per_minute = float(promo_data['predicted_sales'])
         
         threshold = 0.7
         is_cannibalized = actual_sales < (predicted_sales_per_minute * threshold)
@@ -153,20 +160,26 @@ class CannibalizationDetector:
         predicted_sales = float(promo_data['predicted_sales'])
         promo_price = float(promo_data['promo_price'])
         
-        predicted_sales_per_minute = predicted_sales / (7 * 24 * 60)
-        sales_difference = int(predicted_sales_per_minute - actual_sales)
+        # Treat predicted_sales as per-minute baseline for display and loss calculations
+        predicted_sales_per_minute = predicted_sales
+        predicted_sales_rounded = max(1, int(round(predicted_sales_per_minute))) if predicted_sales_per_minute > 0 else 0
+        sales_difference = predicted_sales_rounded - actual_sales
         loss_percentage = (sales_difference / predicted_sales_per_minute * 100) if predicted_sales_per_minute > 0 else 0
-        loss_amount = sales_difference * promo_price
+        loss_percentage = max(0, round(loss_percentage, 2))
+        loss_amount = round(max(0, sales_difference * promo_price), 2)
+        max_loss = promo_price * predicted_sales_per_minute
+        if loss_amount > max_loss:
+            loss_amount = round(max_loss, 2)
         
         return {
             'actual_sales': actual_sales,
-            'predicted_sales': int(predicted_sales_per_minute),
+            'predicted_sales': predicted_sales_rounded,
             'sales_difference': sales_difference,
-            'loss_percentage': round(loss_percentage, 2),
-            'loss_amount': round(loss_amount, 2)
+            'loss_percentage': loss_percentage,
+            'loss_amount': loss_amount
         }
 
-    def _trigger_alert(self, promo_id: str, loss_data: Dict):
+    def _trigger_alert(self, promo_id: str, loss_data: Dict, burst_metadata: Dict = None):
         promo_data = self._fetch_promotion_data(promo_id)
         if not promo_data:
             return
@@ -179,10 +192,17 @@ class CannibalizationDetector:
             'promo_id': promo_id,
             'product_id': promo_data['product_id'],
             'product_name': promo_data['product_name'],
-            'alert_timestamp': datetime.utcnow().isoformat(),
+            'alert_timestamp': datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
             'severity': 'high' if loss_data['loss_percentage'] > 40 else 'medium',
             **loss_data
         }
+        if burst_metadata:
+            if burst_metadata.get('burst_id'):
+                alert_data['burst_id'] = burst_metadata.get('burst_id')
+            if burst_metadata.get('demo_queued_at'):
+                alert_data['demo_queued_at'] = burst_metadata.get('demo_queued_at')
+            if burst_metadata.get('burst_event_count') is not None:
+                alert_data['burst_event_count'] = burst_metadata.get('burst_event_count')
         
         conn = self._get_db_connection()
         try:
@@ -216,35 +236,85 @@ class CannibalizationDetector:
             self.producer.flush()  # Ensure message is sent
             logger.warning(f"🚨 CANNIBALIZATION DETECTED & PUBLISHED: {alert_data['product_name']} - "
                           f"Loss: {alert_data['loss_percentage']}% (${alert_data['loss_amount']})")
+
+            if alert_data.get('burst_id'):
+                try:
+                    self.redis_client.setex(
+                        f"alert_demo:{alert_data['alert_id']}",
+                        3600,
+                        json.dumps({
+                            "burst_id": alert_data.get('burst_id'),
+                            "demo_queued_at": alert_data.get('demo_queued_at'),
+                            "burst_event_count": alert_data.get('burst_event_count')
+                        })
+                    )
+                except Exception as e:
+                    logger.warning(f"Failed to cache demo metadata for alert {alert_data['alert_id']}: {e}")
         except Exception as e:
             logger.error(f"Failed to publish alert to Kafka: {e}")
 
     def process_events(self):
         logger.info("Starting ML Cannibalization Detector...")
-        
-        for message in self.consumer:
-            event = message.value
-            
-            self._store_sales_event(event)
-            
-            self.aggregator.add_event(event)
-            
-            if self.aggregator.should_aggregate():
+        while True:
+            records = self.consumer.poll(timeout_ms=5000, max_records=20)
+            burst_seen = False
+
+            for tp, messages in records.items():
+                for message in messages:
+                    event = message.value
+                    if event.get('burst_id'):
+                        burst_seen = True
+                    self._store_sales_event(event)
+                    self.aggregator.add_event(event)
+
+            should_flush = self.aggregator.should_aggregate() or burst_seen
+            if should_flush and self.aggregator.sales_data:
                 aggregated_data = self.aggregator.get_aggregated_data()
                 
                 for promo_id, sales_info in aggregated_data.items():
-                    actual_sales = sales_info['count']
-                    
-                    is_cannibalized = self._detect_cannibalization(
-                        promo_id, actual_sales, sales_info
-                    )
-                    
-                    if is_cannibalized:
-                        loss_data = self._calculate_loss(promo_id, actual_sales)
-                        if loss_data:
-                            self._trigger_alert(promo_id, loss_data)
+                    events = sales_info.get('events', [])
+                    burst_groups = defaultdict(list)
+                    if events:
+                        for ev in events:
+                            burst_groups[ev.get('burst_id')].append(ev)
                     else:
-                        logger.info(f"✓ Normal sales for {promo_id}: {actual_sales} units")
+                        burst_groups[None] = []
+
+                    for burst_id, evs in burst_groups.items():
+                        if evs:
+                            actual_sales = sum(e.get('quantity', 0) for e in evs)
+                        else:
+                            actual_sales = sales_info['count']
+
+                        demo_queued_at = None
+                        burst_event_count = len(evs) if evs else None
+                        if evs:
+                            for ev in evs:
+                                if ev.get('demo_queued_at'):
+                                    demo_queued_at = ev.get('demo_queued_at')
+                                    break
+                        burst_meta = None
+                        if burst_id:
+                            burst_meta = {
+                                "burst_id": burst_id,
+                                "demo_queued_at": demo_queued_at,
+                                "burst_event_count": burst_event_count
+                            }
+
+                        is_cannibalized = self._detect_cannibalization(
+                            promo_id, actual_sales, {**sales_info, 'events': evs} if evs else sales_info
+                        )
+                    
+                        if is_cannibalized:
+                            loss_data = self._calculate_loss(promo_id, actual_sales)
+                            if loss_data:
+                                self._trigger_alert(
+                                    promo_id,
+                                    loss_data,
+                                    burst_metadata=burst_meta
+                                )
+                        else:
+                            logger.info(f"✓ Normal sales for {promo_id}: {actual_sales} units")
 
     def run(self):
         try:

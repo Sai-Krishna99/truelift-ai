@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import redis
@@ -77,7 +77,12 @@ class AlertResponse(BaseModel):
     severity: str
     status: str
     alert_timestamp: str
+    burst_id: Optional[str] = None
+    demo_queued_at: Optional[str] = None
+    burst_event_count: Optional[int] = None
     strategy: Optional[Dict] = None
+    burst_id: Optional[str] = None
+    demo_queued_at: Optional[str] = None
 
 
 class UserActionRequest(BaseModel):
@@ -86,6 +91,9 @@ class UserActionRequest(BaseModel):
     action_type: str
     action_details: Optional[Dict] = None
     performed_by: str = "manager"
+
+class DemoTriggerRequest(BaseModel):
+    burst_size: int = 6
 
 
 class PromotionResponse(BaseModel):
@@ -100,6 +108,16 @@ class PromotionResponse(BaseModel):
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
+
+
+def _iso_with_z(dt_obj):
+    if not dt_obj:
+        return None
+    if dt_obj.tzinfo is None:
+        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
+    else:
+        dt_obj = dt_obj.astimezone(timezone.utc)
+    return dt_obj.isoformat().replace("+00:00", "Z")
 
 
 @app.get("/")
@@ -153,11 +171,21 @@ async def get_alerts(status: Optional[str] = None, limit: int = 50):
             
             for alert in alerts:
                 if 'alert_timestamp' in alert and alert['alert_timestamp']:
-                    alert['alert_timestamp'] = alert['alert_timestamp'].isoformat()
+                    alert['alert_timestamp'] = _iso_with_z(alert['alert_timestamp'])
                 
                 strategy_json = redis_client.get(f"strategy:{alert['alert_id']}")
                 if strategy_json:
                     alert['strategy'] = json.loads(strategy_json)
+
+                demo_json = redis_client.get(f"alert_demo:{alert['alert_id']}")
+                if demo_json:
+                    try:
+                        demo_data = json.loads(demo_json)
+                        alert['burst_id'] = demo_data.get('burst_id')
+                        alert['demo_queued_at'] = demo_data.get('demo_queued_at')
+                        alert['burst_event_count'] = demo_data.get('burst_event_count')
+                    except Exception:
+                        pass
             
             return [dict(alert) for alert in alerts]
     finally:
@@ -184,7 +212,7 @@ async def get_alert(alert_id: str):
             
             # Convert datetime to ISO string
             if 'alert_timestamp' in alert_dict and alert_dict['alert_timestamp']:
-                alert_dict['alert_timestamp'] = alert_dict['alert_timestamp'].isoformat()
+                alert_dict['alert_timestamp'] = _iso_with_z(alert_dict['alert_timestamp'])
             
             if alert_dict.get('recommended_action'):
                 recommended = alert_dict.pop('recommended_action')
@@ -195,6 +223,16 @@ async def get_alert(alert_id: str):
                     'alternatives': alternatives if isinstance(alternatives, list) else json.loads(alternatives),
                     'confidence_score': float(alert_dict.pop('confidence_score'))
                 }
+
+            demo_json = redis_client.get(f"alert_demo:{alert_id}")
+            if demo_json:
+                try:
+                    demo_data = json.loads(demo_json)
+                    alert_dict['burst_id'] = demo_data.get('burst_id')
+                    alert_dict['demo_queued_at'] = demo_data.get('demo_queued_at')
+                    alert_dict['burst_event_count'] = demo_data.get('burst_event_count')
+                except Exception:
+                    pass
             
             return alert_dict
     finally:
@@ -387,6 +425,24 @@ async def broadcast_alert(alert_data: dict):
         return {"status": "broadcasted", "clients": len(manager.active_connections)}
     except Exception as e:
         logger.error(f"Error broadcasting alert: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/demo/trigger")
+async def trigger_demo(burst: DemoTriggerRequest):
+    """Queue a small demo burst for the simulator (only active when DEMO_MODE=true)."""
+    try:
+        burst_size = max(1, min(20, burst.burst_size))
+        queued_at = _iso_with_z(datetime.utcnow().replace(tzinfo=timezone.utc))
+        burst_id = f"DEMO-{uuid.uuid4().hex[:10]}"
+        redis_client.rpush("demo:burst", json.dumps({
+            "burst_id": burst_id,
+            "burst_size": burst_size,
+            "queued_at": queued_at
+        }))
+        return {"status": "queued", "burst_size": burst_size, "queued_at": queued_at, "burst_id": burst_id}
+    except Exception as e:
+        logger.error(f"Error queuing demo burst: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

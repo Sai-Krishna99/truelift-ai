@@ -55,6 +55,7 @@ class VirtualShopperSimulator:
         self.kafka_bootstrap_servers = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9094')
         self.redis_host = os.getenv('REDIS_HOST', 'localhost')
         self.redis_port = int(os.getenv('REDIS_PORT', 6379))
+        self.demo_mode = os.getenv('DEMO_MODE', 'false').lower() == 'true'
         
         self.producer = KafkaProducer(
             bootstrap_servers=self.kafka_bootstrap_servers,
@@ -87,10 +88,11 @@ class VirtualShopperSimulator:
         now = datetime.utcnow()
         promotions = []
         
-        for i, product in enumerate(self.products[:4]):
+        # Use tighter predicted ranges to allow losses when demand dips
+        base_predictions = [40, 50, 35, 38]
+        for i, (product, predicted) in enumerate(zip(self.products[:4], base_predictions)):
             discount = random.choice([20, 30, 40, 50])
             promo_price = product.original_price * (1 - discount / 100)
-            predicted_sales = int(product.base_demand * (1 + discount / 20))
             
             promo = Promotion(
                 promo_id=f"PROMO{i+1:03d}",
@@ -101,7 +103,7 @@ class VirtualShopperSimulator:
                 discount_percentage=discount,
                 start_date=now,
                 end_date=now + timedelta(days=7),
-                predicted_sales=predicted_sales
+                predicted_sales=predicted
             )
             promotions.append(promo)
             
@@ -137,6 +139,27 @@ class VirtualShopperSimulator:
         
         return event
 
+    async def _run_burst(self, burst_size: int):
+        """Send a small burst of events across promos for demo mode."""
+        logger.info(f"Starting demo burst with {burst_size} batches")
+        for _ in range(burst_size):
+            promotion = random.choice(self.promotions)
+            events_count = random.randint(2, 4)
+            for _ in range(events_count):
+                event = self._generate_shopping_event(promotion)
+                event_data = asdict(event)
+                # Attach demo metadata if present on the simulator instance
+                if hasattr(self, 'current_burst_id'):
+                    event_data['burst_id'] = self.current_burst_id
+                if hasattr(self, 'current_demo_queued_at'):
+                    event_data['demo_queued_at'] = self.current_demo_queued_at
+                self.producer.send('shopping-events', value=event_data)
+                logger.info(f"[Demo Burst] {event.shopper_id} bought {event.quantity}x {event.product_name} "
+                            f"for ${event.total_amount} (Cannibalized: {event.is_cannibalized})")
+                await asyncio.sleep(random.uniform(0.1, 0.3))
+        self.producer.flush()
+        logger.info("Demo burst completed")
+
     async def simulate_shopping_activity(self):
         logger.info("Starting Virtual Shopper Simulator...")
         
@@ -152,8 +175,40 @@ class VirtualShopperSimulator:
             )
         
         while True:
+            if self.demo_mode:
+                burst_request = self.redis_client.lpop("demo:burst")
+                if burst_request:
+                    burst_size = 5
+                    burst_id = f"DEMO-{uuid.uuid4().hex[:10]}"
+                    demo_queued_at = datetime.utcnow().isoformat()
+                    try:
+                        payload = json.loads(burst_request)
+                        burst_size = max(1, min(20, int(payload.get('burst_size', burst_size))))
+                        burst_id = payload.get('burst_id', burst_id)
+                        demo_queued_at = payload.get('queued_at', demo_queued_at)
+                    except Exception:
+                        try:
+                            burst_size = max(1, min(20, int(burst_request)))
+                        except Exception:
+                            burst_size = 5
+                    self.current_burst_id = burst_id
+                    self.current_demo_queued_at = demo_queued_at
+                    try:
+                        await self._run_burst(burst_size)
+                    finally:
+                        if hasattr(self, 'current_burst_id'):
+                            del self.current_burst_id
+                        if hasattr(self, 'current_demo_queued_at'):
+                            del self.current_demo_queued_at
+                else:
+                    await asyncio.sleep(2)
+                continue
+
             for promotion in self.promotions:
-                events_per_minute = random.randint(8, 15)
+                events_per_minute = random.randint(5, 10)
+                # Occasionally create a dip to trigger cannibalization
+                if random.random() < 0.3:
+                    events_per_minute = random.randint(1, 4)
                 
                 for _ in range(events_per_minute):
                     event = self._generate_shopping_event(promotion)

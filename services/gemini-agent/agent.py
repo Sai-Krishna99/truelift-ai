@@ -8,6 +8,7 @@ from psycopg2.extras import RealDictCursor
 import redis
 from google import genai
 from datetime import datetime
+import time
 import requests
 
 logging.basicConfig(level=logging.INFO)
@@ -47,8 +48,36 @@ class GeminiStrategyAgent:
             decode_responses=True
         )
 
+        self.cache_ttl_seconds = int(os.getenv('STRATEGY_CACHE_TTL', '900'))
+        self.rate_limit_window = int(os.getenv('STRATEGY_RATE_LIMIT_SECONDS', '600'))
+
+
     def _get_db_connection(self):
         return psycopg2.connect(**self.db_config)
+
+    def _get_cached_strategy(self, promo_id: str) -> Dict:
+        cached = self.redis_client.get(f"strategy_cache:{promo_id}")
+        if cached:
+            try:
+                return json.loads(cached)
+            except Exception:
+                return None
+        return None
+
+    def _set_cached_strategy(self, promo_id: str, strategy: Dict):
+        try:
+            self.redis_client.setex(
+                f"strategy_cache:{promo_id}",
+                self.cache_ttl_seconds,
+                json.dumps(strategy)
+            )
+            self.redis_client.setex(
+                f"strategy_last:{promo_id}",
+                self.rate_limit_window,
+                str(int(time.time()))
+            )
+        except Exception as e:
+            logger.warning(f"Failed to cache strategy: {e}")
 
     def _fetch_alert_context(self, alert_data: Dict) -> Dict:
         conn = self._get_db_connection()
@@ -229,14 +258,25 @@ Provide actionable, data-driven recommendations."""
             try:
                 alert_data = message.value
                 alert_id = alert_data['alert_id']
+                promo_id = alert_data['promo_id']
                 
                 logger.info(f"Processing alert: {alert_id}")
                 
+                cached_strategy = self._get_cached_strategy(promo_id)
+                last_generated = self.redis_client.get(f"strategy_last:{promo_id}")
+                now_ts = int(time.time())
+
                 context = self._fetch_alert_context(alert_data)
                 
                 prompt = self._generate_gemini_prompt(context)
-                
-                strategy = self._query_gemini(prompt)
+
+                strategy = None
+                if cached_strategy and last_generated and (now_ts - int(last_generated) < self.rate_limit_window):
+                    strategy = cached_strategy
+                    logger.info(f"Using cached strategy for {promo_id}")
+                else:
+                    strategy = self._query_gemini(prompt)
+                    self._set_cached_strategy(promo_id, strategy)
                 
                 self._store_strategy(alert_id, strategy)
                 

@@ -64,6 +64,7 @@ services:
       KAFKA_BOOTSTRAP_SERVERS: kafka:9092
       REDIS_HOST: redis
       REDIS_PORT: 6379
+      DEMO_MODE: "true"
     depends_on:
       kafka:
         condition: service_healthy
@@ -85,6 +86,8 @@ services:
       POSTGRES_USER: truelift_user
       POSTGRES_PASSWORD: truelift_pass
       MODEL_PATH: /app/models
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       kafka:
         condition: service_healthy
