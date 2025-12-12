@@ -72,6 +72,10 @@ export default function Home() {
     };
   }, []);
 
+  useEffect(() => {
+    fetchData();
+  }, [statusFilter]);
+
   const connectWebSocket = () => {
     try {
       const ws = new WebSocket(WS_URL);
@@ -89,8 +93,8 @@ export default function Home() {
           fetchData();
           if (message.type === 'action_taken') {
             const { alert_id, status } = message.data || {};
-            setAlerts(prev => prev.map(a => a.alert_id === alert_id ? { ...a, status: status || 'resolved' } : a));
-            setSelectedAlert(prev => prev && prev.alert_id === alert_id ? { ...prev, status: status || 'resolved' } : prev);
+            setAlerts(prev => prev.map(a => a.alert_id === alert_id ? { ...a, status: status || 'action_taken' } : a));
+            setSelectedAlert(prev => prev && prev.alert_id === alert_id ? { ...prev, status: status || 'action_taken' } : prev);
           }
         }
       };
@@ -115,8 +119,9 @@ export default function Home() {
 
   const fetchData = async () => {
     try {
+      const statusParam = statusFilter !== 'all' ? `status=${statusFilter}&` : '';
       const [alertsRes, statsRes, actionsRes] = await Promise.all([
-        axios.get(`${API_URL}/alerts?limit=50`),
+        axios.get(`${API_URL}/alerts?${statusParam}limit=50`),
         axios.get(`${API_URL}/dashboard/stats`),
         axios.get(`${API_URL}/actions/recent?limit=10`)
       ]);
@@ -151,7 +156,7 @@ export default function Home() {
         performed_by: 'manager'
       });
 
-      setSelectedAlert(prev => prev ? { ...prev, status: 'resolved' } : prev);
+      setSelectedAlert(prev => prev ? { ...prev, status: 'action_taken' } : prev);
       setActionResult({
         message: `Action "${actionType}" executed successfully! ${response.data.message}`,
         type: 'success'
@@ -181,17 +186,15 @@ export default function Home() {
     }
   };
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'action_taken':
-        return 'bg-amber-100 text-amber-800 border border-amber-200';
-      case 'resolved':
-        return 'bg-green-100 text-green-800 border border-green-200';
-      case 'strategy_generated':
-        return 'bg-blue-100 text-blue-800 border border-blue-200';
-      default:
-        return 'bg-gray-100 text-gray-800 border border-gray-200';
-    }
+const getStatusBadge = (status: string) => {
+  switch (status) {
+    case 'action_taken':
+      return 'bg-amber-100 text-amber-800 border border-amber-200';
+    case 'strategy_generated':
+      return 'bg-blue-100 text-blue-800 border border-blue-200';
+    default:
+      return 'bg-gray-100 text-gray-800 border border-gray-200';
+  }
   };
 
   const filteredAlerts = alerts.filter(alert => {
@@ -316,7 +319,6 @@ export default function Home() {
                     <option value="pending">Pending</option>
                     <option value="strategy_generated">Strategy Generated</option>
                     <option value="action_taken">Action Taken</option>
-                    <option value="resolved">Resolved</option>
                   </select>
                 </div>
                 <div>
@@ -368,8 +370,7 @@ export default function Home() {
                         <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
                           {alert.severity.toUpperCase()}
                         </span>
-                        <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'resolved' ? 'bg-green-100 text-green-800' :
-                          alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
+                        <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
                           alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
@@ -526,21 +527,14 @@ export default function Home() {
                       <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
                         <div className="flex items-center justify-center gap-2 text-amber-800 font-medium">
                           <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Action recorded — processing</span>
+                          <span>Action recorded</span>
                         </div>
                         <p className="text-xs text-amber-700 mt-2">
-                          Feedback loop will update effectiveness once enough events arrive.
+                          Waiting for feedback loop to evaluate impact.
                         </p>
                       </div>
                     </div>
-                  ) : (
-                    <div className="pt-4 border-t">
-                      <div className="bg-green-50 border border-green-200 rounded-lg p-4 text-center">
-                        <CheckCircle className="w-8 h-8 text-green-600 mx-auto mb-2" />
-                        <p className="text-sm font-medium text-green-800">This alert has been resolved</p>
-                      </div>
-                    </div>
-                  )}
+                  ) : null}
 
                   <div className="pt-6 border-t mt-6">
                     <div className="flex items-center justify-between mb-3">

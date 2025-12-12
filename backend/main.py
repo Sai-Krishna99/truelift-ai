@@ -253,7 +253,7 @@ async def create_user_action(action: UserActionRequest):
             
             cursor.execute("""
                 UPDATE cannibalization_alerts 
-                SET status = 'resolved' 
+                SET status = 'action_taken' 
                 WHERE alert_id = %s
             """, (action.alert_id,))
             
