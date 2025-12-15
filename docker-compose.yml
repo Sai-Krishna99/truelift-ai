@@ -161,10 +161,14 @@ services:
       POSTGRES_DB: truelift
       POSTGRES_USER: truelift_user
       POSTGRES_PASSWORD: truelift_pass
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
     depends_on:
       kafka:
         condition: service_healthy
       postgres:
+        condition: service_started
+      redis:
         condition: service_started
     restart: on-failure
     networks:

@@ -79,8 +79,8 @@ class VirtualShopperSimulator:
             Product("P003", "Smart Watch Series X", 299.99, "Electronics", 50),
             Product("P004", "Designer Sunglasses", 149.99, "Fashion", 60),
             Product("P005", "Wireless Earbuds Pro", 179.99, "Electronics", 90),
-            Product("P006", "Yoga Mat Premium", 39.99, "Fitness", 70),
-            Product("P007", "Ceramic Cookware Set", 199.99, "Home", 40),
+            Product("P006", "Gourmet Snack Box", 59.99, "Grocery", 70),
+            Product("P007", "Eco Home Starter Kit", 89.99, "Home", 55),
             Product("P008", "Running Shoes Elite", 129.99, "Sports", 85),
         ]
 
@@ -89,8 +89,8 @@ class VirtualShopperSimulator:
         promotions = []
         
         # Use tighter predicted ranges to allow losses when demand dips
-        base_predictions = [40, 50, 35, 38]
-        for i, (product, predicted) in enumerate(zip(self.products[:4], base_predictions)):
+        base_predictions = [40, 50, 35, 38, 26, 22, 28, 30]
+        for i, (product, predicted) in enumerate(zip(self.products, base_predictions)):
             discount = random.choice([20, 30, 40, 50])
             promo_price = product.original_price * (1 - discount / 100)
             
@@ -122,6 +122,19 @@ class VirtualShopperSimulator:
         is_cannibalized = self._should_cannibalize(promotion)
         
         quantity = random.randint(1, 3)
+        # Refresh promo price/active from Redis cache if present
+        try:
+            promo_cache = self.redis_client.hgetall(f"promotion:{promotion.promo_id}")
+            if promo_cache:
+                if promo_cache.get('promo_price'):
+                    promotion.promo_price = float(promo_cache['promo_price'])
+                if promo_cache.get('is_active') and promo_cache.get('is_active').lower() == 'false':
+                    raise ValueError("inactive")
+        except ValueError:
+            raise
+        except Exception:
+            pass
+
         price = promotion.promo_price
         
         event = ShoppingEvent(
@@ -146,7 +159,10 @@ class VirtualShopperSimulator:
             promotion = random.choice(self.promotions)
             events_count = random.randint(2, 4)
             for _ in range(events_count):
-                event = self._generate_shopping_event(promotion)
+                try:
+                    event = self._generate_shopping_event(promotion)
+                except ValueError:
+                    continue
                 event_data = asdict(event)
                 # Attach demo metadata if present on the simulator instance
                 if hasattr(self, 'current_burst_id'):
@@ -211,7 +227,10 @@ class VirtualShopperSimulator:
                     events_per_minute = random.randint(1, 4)
                 
                 for _ in range(events_per_minute):
-                    event = self._generate_shopping_event(promotion)
+                    try:
+                        event = self._generate_shopping_event(promotion)
+                    except ValueError:
+                        continue
                     
                     event_data = asdict(event)
                     

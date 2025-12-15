@@ -1,13 +1,15 @@
 import json
 import os
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Dict
 from kafka import KafkaConsumer
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import time
 import uuid
+import redis
+import json
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -32,6 +34,11 @@ class FeedbackLoopProcessor:
         )
         
         self.action_monitoring = {}
+        self.redis_client = redis.Redis(
+            host=os.getenv('REDIS_HOST', 'localhost'),
+            port=int(os.getenv('REDIS_PORT', 6379)),
+            decode_responses=True
+        )
 
     def _get_db_connection(self):
         return psycopg2.connect(**self.db_config)
@@ -48,7 +55,7 @@ class FeedbackLoopProcessor:
         finally:
             conn.close()
 
-    def _get_sales_before_action(self, promo_id: str, action_timestamp: str) -> int:
+    def _get_sales_before_action(self, promo_id: str, action_timestamp) -> int:
         conn = self._get_db_connection()
         try:
             with conn.cursor() as cursor:
@@ -56,15 +63,15 @@ class FeedbackLoopProcessor:
                     SELECT COUNT(*) as sales_count
                     FROM sales_events
                     WHERE promo_id = %s 
-                    AND event_timestamp < %s
-                    AND event_timestamp > %s - INTERVAL '5 minutes'
+                    AND event_timestamp < %s::timestamp
+                    AND event_timestamp > %s::timestamp - INTERVAL '5 minutes'
                 """, (promo_id, action_timestamp, action_timestamp))
                 result = cursor.fetchone()
                 return result[0] if result else 0
         finally:
             conn.close()
 
-    def _get_sales_after_action(self, promo_id: str, action_timestamp: str) -> int:
+    def _get_sales_after_action(self, promo_id: str, action_timestamp) -> int:
         conn = self._get_db_connection()
         try:
             with conn.cursor() as cursor:
@@ -72,8 +79,8 @@ class FeedbackLoopProcessor:
                     SELECT COUNT(*) as sales_count
                     FROM sales_events
                     WHERE promo_id = %s 
-                    AND event_timestamp > %s
-                    AND event_timestamp < %s + INTERVAL '5 minutes'
+                    AND event_timestamp > %s::timestamp
+                    AND event_timestamp < %s::timestamp + INTERVAL '5 minutes'
                 """, (promo_id, action_timestamp, action_timestamp))
                 result = cursor.fetchone()
                 return result[0] if result else 0
@@ -82,6 +89,12 @@ class FeedbackLoopProcessor:
 
     def _calculate_effectiveness(self, action_type: str, sales_before: int, sales_after: int, 
                                 old_price: float, new_price: float) -> float:
+        try:
+            old_price = float(old_price) if old_price is not None else 0.0
+            new_price = float(new_price) if new_price is not None else old_price
+        except Exception:
+            old_price = 0.0
+            new_price = 0.0
         if action_type == "stop_promotion":
             if sales_before > 0:
                 reduction_rate = (sales_before - sales_after) / sales_before
@@ -104,18 +117,27 @@ class FeedbackLoopProcessor:
     def _process_stop_promotion(self, action_data: Dict):
         promo_id = action_data['promo_id']
         action_id = action_data['action_id']
-        action_timestamp = action_data['timestamp']
+        alert_id = action_data.get('alert_id')
+        action_timestamp_raw = action_data['timestamp']
+        try:
+            action_timestamp = datetime.fromisoformat(action_timestamp_raw.replace("Z", "+00:00"))
+        except Exception:
+            action_timestamp = datetime.now(timezone.utc)
+        if datetime.now(timezone.utc) - action_timestamp > timedelta(minutes=10):
+            logger.info(f"Skipping stale action {action_id}")
+            return
+        ts_query = action_timestamp.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         
         logger.info(f"Monitoring feedback for stopped promotion: {promo_id}")
         
-        time.sleep(10)
+        time.sleep(8)
         
         promo_data = self._get_promotion_data(promo_id)
         if not promo_data:
             return
         
-        sales_before = self._get_sales_before_action(promo_id, action_timestamp)
-        sales_after = self._get_sales_after_action(promo_id, action_timestamp)
+        sales_before = self._get_sales_before_action(promo_id, ts_query)
+        sales_after = self._get_sales_after_action(promo_id, ts_query)
         
         old_price = promo_data['promo_price']
         new_price = promo_data['original_price']
@@ -133,6 +155,8 @@ class FeedbackLoopProcessor:
             sales_after=sales_after,
             effectiveness_score=effectiveness
         )
+        if alert_id:
+            self._cache_feedback(alert_id, effectiveness, sales_before, sales_after, old_price, new_price)
         
         logger.info(f"Feedback recorded: Promotion {promo_id} stopped. "
                    f"Sales: {sales_before} → {sales_after}, Effectiveness: {effectiveness:.1f}%")
@@ -140,7 +164,16 @@ class FeedbackLoopProcessor:
     def _process_adjust_price(self, action_data: Dict):
         promo_id = action_data['promo_id']
         action_id = action_data['action_id']
-        action_timestamp = action_data['timestamp']
+        alert_id = action_data.get('alert_id')
+        action_timestamp_raw = action_data['timestamp']
+        try:
+            action_timestamp = datetime.fromisoformat(action_timestamp_raw.replace("Z", "+00:00"))
+        except Exception:
+            action_timestamp = datetime.now(timezone.utc)
+        if datetime.now(timezone.utc) - action_timestamp > timedelta(minutes=10):
+            logger.info(f"Skipping stale action {action_id}")
+            return
+        ts_query = action_timestamp.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
         
         logger.info(f"Monitoring feedback for price adjustment: {promo_id}")
         
@@ -150,7 +183,11 @@ class FeedbackLoopProcessor:
         
         old_price = promo_data['promo_price']
         
-        new_price = old_price * 1.10
+        new_price = action_data.get('new_price') or old_price
+        try:
+            new_price = float(new_price)
+        except Exception:
+            new_price = old_price
         
         conn = self._get_db_connection()
         try:
@@ -164,10 +201,10 @@ class FeedbackLoopProcessor:
         finally:
             conn.close()
         
-        time.sleep(10)
+        time.sleep(8)
         
-        sales_before = self._get_sales_before_action(promo_id, action_timestamp)
-        sales_after = self._get_sales_after_action(promo_id, action_timestamp)
+        sales_before = self._get_sales_before_action(promo_id, ts_query)
+        sales_after = self._get_sales_after_action(promo_id, ts_query)
         
         effectiveness = self._calculate_effectiveness(
             'adjust_price', sales_before, sales_after, old_price, new_price
@@ -182,6 +219,8 @@ class FeedbackLoopProcessor:
             sales_after=sales_after,
             effectiveness_score=effectiveness
         )
+        if alert_id:
+            self._cache_feedback(alert_id, effectiveness, sales_before, sales_after, old_price, new_price)
         
         logger.info(f"Feedback recorded: Price adjusted for {promo_id}. "
                    f"${old_price:.2f} → ${new_price:.2f}, Effectiveness: {effectiveness:.1f}%")
@@ -213,6 +252,23 @@ class FeedbackLoopProcessor:
                 conn.commit()
         finally:
             conn.close()
+    
+    def _cache_feedback(self, alert_id: str, effectiveness: float, sales_before: int,
+                        sales_after: int, old_price: float, new_price: float):
+        try:
+            payload_data = {
+                "effectiveness_score": float(effectiveness),
+                "sales_before": int(sales_before),
+                "sales_after": int(sales_after),
+                "old_price": float(old_price) if old_price is not None else None,
+                "new_price": float(new_price) if new_price is not None else None
+            }
+            payload = {
+                k: v for k, v in payload_data.items()
+            }
+            self.redis_client.setex(f"feedback:{alert_id}", 1800, json.dumps(payload))
+        except Exception as e:
+            logger.warning(f"Failed to cache feedback for {alert_id}: {e}")
 
     def process_actions(self):
         logger.info("Starting Feedback Loop Processor...")

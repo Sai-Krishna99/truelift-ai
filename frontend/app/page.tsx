@@ -2,30 +2,38 @@
 
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle, Filter, ChevronLeft, ChevronRight, RefreshCw, Zap } from 'lucide-react';
+import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle, Filter, ChevronLeft, ChevronRight, RefreshCw, Zap, HelpCircle } from 'lucide-react';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_URL = API_URL.replace('http', 'ws') + '/ws';
 
-interface Alert {
-  alert_id: string;
-  promo_id: string;
-  product_name: string;
-  actual_sales: number;
-  predicted_sales: number;
-  loss_percentage: number;
-  loss_amount: number;
-  severity: string;
-  status: string;
-  alert_timestamp: string;
-  burst_id?: string;
-  demo_queued_at?: string;
-  burst_event_count?: number;
-  strategy?: {
-    explanation: string;
-    primary_recommendation: {
-      action: string;
-      details: string;
+  interface Alert {
+    alert_id: string;
+    promo_id: string;
+    product_name: string;
+    actual_sales: number;
+    predicted_sales: number;
+    loss_percentage: number;
+    loss_amount: number;
+    severity: string;
+    status: string;
+    alert_timestamp: string;
+    burst_id?: string;
+    demo_queued_at?: string;
+    burst_event_count?: number;
+    original_price?: number;
+    promo_price?: number;
+    discount_percentage?: number;
+    feedback_effectiveness?: number;
+    feedback_sales_before?: number;
+    feedback_sales_after?: number;
+    feedback_old_price?: number;
+    feedback_new_price?: number;
+    strategy?: {
+      explanation: string;
+      primary_recommendation: {
+        action: string;
+        details: string;
       expected_impact: string;
     };
     alternatives: Array<{
@@ -58,13 +66,54 @@ export default function Home() {
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage] = useState(10);
   const [showFilters, setShowFilters] = useState(false);
-  const [actionResult, setActionResult] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [actionResult, setActionResult] = useState<{ alertId?: string; message: string; type: 'success' | 'error' } | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
   const [recentActions, setRecentActions] = useState<any[]>([]);
   const [showActionHistory, setShowActionHistory] = useState(false);
   const [demoLoading, setDemoLoading] = useState(false);
   const [demoResult, setDemoResult] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [demoActive, setDemoActive] = useState(false);
+  const demoTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const [actionToast, setActionToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
+  const [actionImpacts, setActionImpacts] = useState<Record<string, { status: 'pending' | 'measured'; impact: number | null, actionType?: string }>>({});
+  const impactTimers = useRef<Record<string, NodeJS.Timeout>>({});
+  const [adjustPriceValue, setAdjustPriceValue] = useState<number | null>(null);
+  const measuredImpactTotal = Object.values(actionImpacts || {})
+    .filter(i => i.status === 'measured' && i.impact !== null)
+    .reduce((sum, i) => sum + (i.impact || 0), 0);
+
+  const renderImpactText = (alert: Alert) => {
+    if (alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null) {
+      return `Feedback: ${alert.feedback_effectiveness.toFixed(1)}% effectiveness` +
+        ` | Sales ${alert.feedback_sales_before || 0} → ${alert.feedback_sales_after || 0}` +
+        (alert.feedback_old_price ? ` | Price $${alert.feedback_old_price.toFixed(2)}` : '') +
+        (alert.feedback_new_price ? ` → $${alert.feedback_new_price.toFixed(2)}` : '');
+    }
+    const impactEntry = actionImpacts[alert.alert_id];
+    if (!impactEntry) return null;
+    const delta = impactEntry.impact ?? 0;
+    const prefix = delta >= 0 ? '+' : '';
+    if (impactEntry.actionType === 'stop_promotion') {
+      return `${prefix}${delta}% loss reduction (promo halted)`;
+    }
+    if (impactEntry.actionType === 'adjust_price') {
+      return `${prefix}${delta}% from price adjustment`;
+    }
+    return `${prefix}${delta}% impact measured`;
+  };
+
+  const renderImpactBadgeText = (alert: Alert) => {
+    if (alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null) {
+      return `Impact ${alert.feedback_effectiveness.toFixed(0)}%`;
+    }
+    const impactEntry = actionImpacts[alert.alert_id];
+    if (!impactEntry) return null;
+    if (impactEntry.status === 'pending') return 'Impact pending';
+    const delta = impactEntry.impact ?? 0;
+    const prefix = delta >= 0 ? '+' : '';
+    return `Impact ${prefix}${delta.toFixed(0)}%`;
+  };
 
   useEffect(() => {
     fetchData();
@@ -80,6 +129,39 @@ export default function Home() {
   useEffect(() => {
     fetchData();
   }, [statusFilter]);
+
+  // When alerts refresh, fold in any measured feedback so badges/banners update immediately.
+  useEffect(() => {
+    if (!alerts.length) return;
+    setActionImpacts((prev) => {
+      const next = { ...prev };
+      alerts.forEach((alert) => {
+        if (alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null) {
+          next[alert.alert_id] = {
+            status: 'measured',
+            impact: alert.feedback_effectiveness,
+            actionType: prev[alert.alert_id]?.actionType,
+          };
+        }
+      });
+      return next;
+    });
+  }, [alerts]);
+
+  useEffect(() => {
+    if (!selectedAlert || selectedAlert.status !== 'action_taken') return;
+    if (selectedAlert.feedback_effectiveness) return;
+    const timer = setInterval(() => {
+      handleAlertClick(selectedAlert);
+    }, 6000);
+    return () => clearInterval(timer);
+  }, [selectedAlert]);
+
+  useEffect(() => {
+    if (!actionToast) return;
+    const timer = setTimeout(() => setActionToast(null), 4000);
+    return () => clearTimeout(timer);
+  }, [actionToast]);
 
   const connectWebSocket = () => {
     try {
@@ -141,15 +223,27 @@ export default function Home() {
   };
 
   const handleAlertClick = async (alert: Alert) => {
+    setActionResult(null);
     try {
       const response = await axios.get(`${API_URL}/alerts/${alert.alert_id}`);
-      setSelectedAlert(response.data);
+      const data = response.data;
+      setSelectedAlert(data);
+      if (data.feedback_effectiveness !== undefined && data.feedback_effectiveness !== null) {
+        setActionImpacts(prev => ({
+          ...prev,
+          [data.alert_id]: {
+            status: 'measured',
+            impact: data.feedback_effectiveness,
+            actionType: prev[data.alert_id]?.actionType
+          }
+        }));
+      }
     } catch (error) {
       console.error('Error fetching alert details:', error);
     }
   };
 
-  const handleAction = async (alertId: string, promoId: string, actionType: string) => {
+  const handleAction = async (alertId: string, promoId: string, actionType: string, adjustPriceValue?: number) => {
     setActionLoading(true);
     setActionResult(null);
 
@@ -158,23 +252,39 @@ export default function Home() {
         alert_id: alertId,
         promo_id: promoId,
         action_type: actionType,
+        action_details: actionType === 'adjust_price' && adjustPriceValue ? { new_price: adjustPriceValue } : undefined,
         performed_by: 'manager'
       });
 
       setSelectedAlert(prev => prev ? { ...prev, status: 'action_taken' } : prev);
       setActionResult({
-        message: `Action "${actionType}" executed successfully! ${response.data.message}`,
+        alertId,
+        message: response.data.message || 'Action applied successfully',
         type: 'success'
       });
+      setActionToast({ message: `Action sent: ${actionType}`, type: 'success' });
+      setActionImpacts(prev => ({
+        ...prev,
+        [alertId]: { status: 'pending', impact: null, actionType }
+      }));
+      if (impactTimers.current[alertId]) {
+        clearTimeout(impactTimers.current[alertId]);
+      }
+      impactTimers.current[alertId] = setTimeout(() => {
+        // If feedback arrives from backend it will override this; otherwise keep pending.
+        setActionImpacts(prev => ({ ...prev }));
+      }, 15000);
 
       fetchData();
 
     } catch (error: any) {
       console.error('Error executing action:', error);
       setActionResult({
+        alertId,
         message: `Failed to execute action: ${error.response?.data?.detail || error.message}`,
         type: 'error'
       });
+      setActionToast({ message: 'Action failed', type: 'error' });
     } finally {
       setActionLoading(false);
     }
@@ -187,6 +297,11 @@ export default function Home() {
       const resp = await axios.post(`${API_URL}/demo/trigger`, { burst_size: burstSize });
       const burstId = resp.data?.burst_id ? ` (${resp.data.burst_id})` : '';
       setDemoResult({ message: `Demo burst queued${burstId ? burstId : ''} (${burstSize} batches)`, type: 'success' });
+      setDemoActive(true);
+      if (demoTimerRef.current) {
+        clearTimeout(demoTimerRef.current);
+      }
+      demoTimerRef.current = setTimeout(() => setDemoActive(false), 45000);
     } catch (error: any) {
       console.error('Error triggering demo burst:', error);
       setDemoResult({ message: `Failed to start demo: ${error.response?.data?.detail || error.message}`, type: 'error' });
@@ -235,6 +350,14 @@ const getStatusBadge = (status: string) => {
     return 'DEMO';
   };
 
+  const formatBurstMeta = (alert: Alert) => {
+    if (!alert.burst_id) return null;
+    const parts = [];
+    parts.push(`Burst: ${alert.burst_id}`);
+    if (alert.burst_event_count) parts.push(`${alert.burst_event_count} events`);
+    return parts.join(' • ');
+  };
+
   const formatTimestamp = (value: string) => {
     const date = new Date(value);
     return date.toLocaleString(undefined, {
@@ -267,6 +390,13 @@ const getStatusBadge = (status: string) => {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {actionToast && (
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-sm ${
+          actionToast.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'
+        }`}>
+          {actionToast.message}
+        </div>
+      )}
       <header className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <div className="flex items-center justify-between">
@@ -298,6 +428,43 @@ const getStatusBadge = (status: string) => {
           </div>
         </div>
       </header>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="bg-white border rounded-lg p-4 shadow-sm flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-gray-900">Demo mode is ON</p>
+            <p className="text-sm text-gray-600 mt-1">
+              Trigger a burst to simulate promo cannibalization. We send event batches; the detector summarizes them into alerts (usually one per promo touched), and DEMO tags carry burst size and timing.
+            </p>
+            <p className="text-xs text-gray-500 mt-1">Events != alerts: multiple events roll into a single alert when the detector sees a shortfall.</p>
+          </div>
+          <div className="flex items-center gap-3 flex-wrap">
+            {demoActive && (
+              <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 text-xs font-semibold">
+                <RefreshCw className="w-4 h-4 animate-spin" />
+                Demo running...
+              </span>
+            )}
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-blue-50 text-blue-700 border border-blue-200 text-xs font-semibold">
+              Demo: ON
+            </span>
+            <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gray-100 text-gray-700 border border-gray-200 text-xs font-semibold">
+              Live: OFF (cost-safe)
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 shadow-sm">
+          <p className="text-sm font-semibold text-blue-900">New here? How to demo TrueLift AI</p>
+          <div className="text-sm text-blue-800 mt-2 space-y-1">
+            <p>1) Click “Start Demo” to send a short burst of shopper events.</p>
+            <p>2) Watch alerts tagged DEMO (1 per promo hit) with burst size and pricing context.</p>
+            <p>3) Open an alert to see AI strategy; take an action (stop/adjust) to close the loop.</p>
+          </div>
+        </div>
+      </div>
 
       {demoResult && (
         <div className={`mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-3`}>
@@ -353,10 +520,18 @@ const getStatusBadge = (status: string) => {
             </div>
           </div>
         </div>
+        <div className="text-xs text-gray-500 mb-4">
+          Alerts update live; events roll up into alerts per promo. DEMO tags show burst info; actions will reflect in real time.
+        </div>
 
-        <div className="bg-white rounded-lg shadow">
-          <div className="px-6 py-4 border-b flex items-center justify-between">
-            <h2 className="text-xl font-semibold text-gray-900">Cannibalization Alerts</h2>
+          <div className="bg-white rounded-lg shadow">
+            <div className="px-6 py-4 border-b flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <h2 className="text-xl font-semibold text-gray-900">Cannibalization Alerts</h2>
+              <span title="Multiple events roll up into one alert per promo; DEMO shows burst info.">
+                <HelpCircle className="w-4 h-4 text-gray-400" aria-hidden="true" />
+              </span>
+            </div>
             <button
               onClick={() => setShowFilters(!showFilters)}
               className="flex items-center gap-2 px-3 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition"
@@ -429,8 +604,26 @@ const getStatusBadge = (status: string) => {
                     <div className="flex items-center gap-3 mb-2">
                       <h3 className="text-lg font-semibold text-gray-900">{alert.product_name}</h3>
                       {isDemoAlert(alert) && (
-                        <span className="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                        <span
+                          title="DEMO burst events rolled up into this alert"
+                          className="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-200"
+                        >
                           {formatDemoLabel(alert)}
+                        </span>
+                      )}
+                      {(alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null || actionImpacts[alert.alert_id]) && (
+                        <span className={`px-2 py-1 text-xs font-semibold rounded border ${
+                          alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
+                            ? (alert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200')
+                            : actionImpacts[alert.alert_id]?.status === 'pending'
+                              ? 'bg-gray-100 text-gray-700 border-gray-200'
+                              : (actionImpacts[alert.alert_id]?.impact ?? 0) >= 0
+                                ? 'bg-green-100 text-green-800 border-green-200'
+                                : 'bg-red-100 text-red-800 border-red-200'
+                        }`}>
+                          {alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
+                            ? renderImpactBadgeText(alert)
+                            : renderImpactBadgeText(alert)}
                         </span>
                       )}
                       <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
@@ -458,13 +651,24 @@ const getStatusBadge = (status: string) => {
                           <p className="text-sm font-medium text-red-600">{alert.loss_percentage.toFixed(1)}%</p>
                         </div>
                         <div>
-                          <p className="text-xs text-gray-500">Revenue Loss</p>
+                          <p className="text-xs text-gray-500">Est. Revenue Loss</p>
                           <p className="text-sm font-medium text-red-600">${alert.loss_amount.toFixed(2)}</p>
                         </div>
                       </div>
 
+                      {(alert.original_price || alert.promo_price || alert.discount_percentage) && (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-3 text-xs text-gray-600">
+                          {alert.original_price && <span>Original: ${alert.original_price.toFixed(2)}</span>}
+                          {alert.promo_price && <span>Promo: ${alert.promo_price.toFixed(2)}</span>}
+                          {alert.discount_percentage && <span>Discount: {alert.discount_percentage.toFixed(0)}%</span>}
+                        </div>
+                      )}
+
                       <p className="text-xs text-gray-500 mt-3">
                         {formatTimestamp(alert.alert_timestamp)}
+                        {formatBurstMeta(alert) && (
+                          <span className="ml-2 text-amber-700 font-semibold">{formatBurstMeta(alert)}</span>
+                        )}
                       </p>
                     </div>
                   </div>
@@ -510,7 +714,22 @@ const getStatusBadge = (status: string) => {
                 <span className={`px-3 py-1 text-xs font-semibold rounded-full ${getStatusBadge(selectedAlert.status)}`}>
                   {selectedAlert.status.replace('_', ' ').toUpperCase()}
                 </span>
-              </div>
+                {(selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null) || actionImpacts[selectedAlert.alert_id] ? (
+                  <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
+                    selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
+                      ? (selectedAlert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200')
+                      : actionImpacts[selectedAlert.alert_id]?.status === 'pending'
+                        ? 'bg-gray-100 text-gray-700 border border-gray-200'
+                        : (actionImpacts[selectedAlert.alert_id]?.impact ?? 0) >= 0
+                          ? 'bg-green-100 text-green-800 border border-green-200'
+                          : 'bg-red-100 text-red-800 border border-red-200'
+                  }`}>
+                    {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
+                      ? renderImpactBadgeText(selectedAlert)
+                      : renderImpactBadgeText(selectedAlert)}
+                  </span>
+                ) : null}
+                      </div>
               <button onClick={() => setSelectedAlert(null)} className="text-gray-400 hover:text-gray-600">
                 <XCircle className="w-6 h-6" />
               </button>
@@ -520,10 +739,25 @@ const getStatusBadge = (status: string) => {
               <div className="mb-6">
                 <h4 className="text-lg font-semibold text-gray-900 mb-2">{selectedAlert.product_name}</h4>
                 <p className="text-sm text-gray-600">Promo ID: {selectedAlert.promo_id}</p>
-                <p className="text-xs text-gray-500 mt-1">Alerted: {formatTimestamp(selectedAlert.alert_timestamp)}</p>
+                <p className="text-xs text-gray-500 mt-1">
+                  Alerted: {formatTimestamp(selectedAlert.alert_timestamp)}
+                  {selectedAlert.burst_id && (
+                    <span className="ml-2 text-amber-700 font-semibold">
+                      Burst {selectedAlert.burst_id}
+                      {selectedAlert.burst_event_count ? ` • ${selectedAlert.burst_event_count} events` : ''}
+                    </span>
+                  )}
+                </p>
+                {(selectedAlert.original_price || selectedAlert.promo_price || selectedAlert.discount_percentage) && (
+                  <p className="text-xs text-gray-600 mt-1">
+                    Pricing: {selectedAlert.original_price ? `Original $${selectedAlert.original_price.toFixed(2)}` : ''} 
+                    {selectedAlert.promo_price ? ` • Promo $${selectedAlert.promo_price.toFixed(2)}` : ''} 
+                    {selectedAlert.discount_percentage ? ` • Discount ${selectedAlert.discount_percentage.toFixed(0)}%` : ''}
+                  </p>
+                )}
               </div>
 
-              {actionResult && (
+              {actionResult && selectedAlert.alert_id === actionResult.alertId && (
                 <div className={`mb-6 p-4 rounded-lg ${actionResult.type === 'success' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
                   <p className={`text-sm font-medium ${actionResult.type === 'success' ? 'text-green-800' : 'text-red-800'}`}>
                     {actionResult.message}
@@ -532,7 +766,7 @@ const getStatusBadge = (status: string) => {
               )}
 
               {selectedAlert.strategy && (
-                <div className="space-y-6">
+                  <div className="space-y-6">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                     <h5 className="font-semibold text-blue-900 mb-2">🤖 AI Explanation</h5>
                     <p className="text-sm text-blue-800">{selectedAlert.strategy.explanation}</p>
@@ -560,27 +794,41 @@ const getStatusBadge = (status: string) => {
                   {selectedAlert.status === 'pending' || selectedAlert.status === 'strategy_generated' ? (
                     <div className="pt-4 border-t">
                       <h5 className="font-semibold text-gray-900 mb-3">⚡ Execute Action</h5>
-                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
                         <button
                           onClick={() => handleAction(selectedAlert.alert_id, selectedAlert.promo_id, 'stop_promotion')}
                           disabled={actionLoading}
-                          className="flex items-center justify-center gap-2 bg-red-600 text-white px-4 py-3 rounded-lg font-medium hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                          className="flex items-center justify-center gap-2 bg-red-600 text-white px-4 py-3 rounded-lg font-semibold hover:bg-red-700 transition disabled:opacity-50 disabled:cursor-not-allowed h-12 w-full"
                         >
                           {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <XCircle className="w-4 h-4" />}
                           Stop Promotion
                         </button>
-                        <button
-                          onClick={() => handleAction(selectedAlert.alert_id, selectedAlert.promo_id, 'adjust_price')}
-                          disabled={actionLoading}
-                          className="flex items-center justify-center gap-2 bg-yellow-600 text-white px-4 py-3 rounded-lg font-medium hover:bg-yellow-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                          {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <DollarSign className="w-4 h-4" />}
-                          Adjust Price
-                        </button>
+                        <div className="flex flex-col gap-2">
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              value={adjustPriceValue ?? ''}
+                              onChange={(e) => setAdjustPriceValue(e.target.value ? parseFloat(e.target.value) : null)}
+                              placeholder={selectedAlert.promo_price ? `New price (current $${selectedAlert.promo_price.toFixed(2)})` : 'New promo price'}
+                              className="w-full px-3 py-2 border border-yellow-300 rounded-lg focus:ring-2 focus:ring-yellow-500 focus:border-transparent text-sm text-gray-900 h-12"
+                            />
+                            <button
+                              onClick={() => handleAction(selectedAlert.alert_id, selectedAlert.promo_id, 'adjust_price', adjustPriceValue || undefined)}
+                              disabled={actionLoading}
+                              className="flex items-center justify-center gap-2 bg-yellow-600 text-white px-4 py-3 rounded-lg font-semibold hover:bg-yellow-700 transition disabled:opacity-50 disabled:cursor-not-allowed h-12"
+                            >
+                              {actionLoading ? <RefreshCw className="w-4 h-4 animate-spin" /> : <DollarSign className="w-4 h-4" />}
+                              Adjust Price
+                            </button>
+                          </div>
+                          <p className="text-xs text-gray-600">Enter a new promo price to test price sensitivity.</p>
+                        </div>
                         <button
                           onClick={() => setSelectedAlert(null)}
                           disabled={actionLoading}
-                          className="flex items-center justify-center gap-2 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-medium hover:bg-gray-400 transition"
+                          className="flex items-center justify-center gap-2 bg-gray-300 text-gray-700 px-4 py-3 rounded-lg font-semibold hover:bg-gray-400 transition h-12 w-full"
                         >
                           Dismiss
                         </button>
@@ -591,15 +839,28 @@ const getStatusBadge = (status: string) => {
                     </div>
                   ) : selectedAlert.status === 'action_taken' ? (
                     <div className="pt-4 border-t">
-                      <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
-                        <div className="flex items-center justify-center gap-2 text-amber-800 font-medium">
-                          <RefreshCw className="w-4 h-4 animate-spin" />
-                          <span>Action recorded</span>
+                        <div className={`${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'} rounded-lg p-4 text-center`}>
+                          <div className="flex items-center justify-center gap-2 font-medium text-sm">
+                            {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? (
+                              <span className="text-green-800">Impact measured</span>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
+                                <span className="text-amber-800">Action recorded</span>
+                              </>
+                            )}
+                          </div>
+                          <p className={`text-xs mt-2 ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'text-green-700' : 'text-amber-700'}`}>
+                            {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
+                              ? renderImpactText(selectedAlert)
+                              : 'Waiting for feedback loop to evaluate impact.'}
+                          </p>
+                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null && (
+                            <p className="text-xs text-green-700 mt-1">
+                              Sales {selectedAlert.feedback_sales_before || 0} → {selectedAlert.feedback_sales_after || 0}; Price {selectedAlert.feedback_old_price ? `$${selectedAlert.feedback_old_price.toFixed(2)}` : ''} {selectedAlert.feedback_new_price ? `→ $${selectedAlert.feedback_new_price.toFixed(2)}` : ''}
+                            </p>
+                          )}
                         </div>
-                        <p className="text-xs text-amber-700 mt-2">
-                          Waiting for feedback loop to evaluate impact.
-                        </p>
-                      </div>
                     </div>
                   ) : null}
 
