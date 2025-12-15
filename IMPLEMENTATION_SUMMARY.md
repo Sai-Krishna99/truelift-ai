@@ -27,6 +27,7 @@ I've built a **production-grade real-time cannibalization detection system** bas
 - Generates 8-15 shopping events per minute
 - Simulates realistic cannibalization patterns
 - Publishes to Kafka `shopping-events` topic
+- Updated: Demo bursts tagged with `burst_id` so downstream/UI can label reliably.
 
 ✅ **Confluent Cloud Integration**
 - Kafka topics: `shopping-events`, `market_events`, `windowed_stats`, `cannibalization-alerts`, `user-actions`
@@ -41,6 +42,7 @@ I've built a **production-grade real-time cannibalization detection system** bas
 - Real-time cannibalization detection
 - Deviation threshold checking
 - Alert triggering system
+- Updated: Decimal-to-float handling tightened; feedback fields passed through cleanly.
 
 ✅ **Gemini Pro Agent** (`services/gemini-agent/agent.py`)
 - AI-powered loss explanation
@@ -53,6 +55,7 @@ I've built a **production-grade real-time cannibalization detection system** bas
 - Real-time WebSocket updates
 - Alert management UI
 - One-click action execution
+- Updated: Compact impact badges; modal flips from pending → measured when feedback arrives.
 
 ✅ **Backend API** (`backend/main.py`)
 - FastAPI REST service
@@ -64,6 +67,7 @@ I've built a **production-grade real-time cannibalization detection system** bas
 - Price adjustment automation
 - Before/after metrics tracking
 - Effectiveness scoring
+- Updated: Consumes user actions with price context, computes impact (sales/price deltas), caches to Redis for UI.
 
 ✅ **Database** (`infrastructure/init.sql`)
 - Cloud SQL / PostgreSQL schemas
