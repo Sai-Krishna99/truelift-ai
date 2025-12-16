@@ -55,7 +55,7 @@ class FeedbackLoopProcessor:
         finally:
             conn.close()
 
-    def _get_sales_before_action(self, promo_id: str, action_timestamp) -> int:
+    def _get_sales_before_action(self, promo_id: str, action_timestamp_str: str) -> int:
         conn = self._get_db_connection()
         try:
             with conn.cursor() as cursor:
@@ -64,14 +64,14 @@ class FeedbackLoopProcessor:
                     FROM sales_events
                     WHERE promo_id = %s 
                     AND event_timestamp < %s::timestamp
-                    AND event_timestamp > %s::timestamp - INTERVAL '5 minutes'
-                """, (promo_id, action_timestamp, action_timestamp))
+                    AND event_timestamp > (%s::timestamp - INTERVAL '5 minutes')
+                """, (promo_id, action_timestamp_str, action_timestamp_str))
                 result = cursor.fetchone()
                 return result[0] if result else 0
         finally:
             conn.close()
 
-    def _get_sales_after_action(self, promo_id: str, action_timestamp) -> int:
+    def _get_sales_after_action(self, promo_id: str, action_timestamp_str: str) -> int:
         conn = self._get_db_connection()
         try:
             with conn.cursor() as cursor:
@@ -80,8 +80,8 @@ class FeedbackLoopProcessor:
                     FROM sales_events
                     WHERE promo_id = %s 
                     AND event_timestamp > %s::timestamp
-                    AND event_timestamp < %s::timestamp + INTERVAL '5 minutes'
-                """, (promo_id, action_timestamp, action_timestamp))
+                    AND event_timestamp < (%s::timestamp + INTERVAL '5 minutes')
+                """, (promo_id, action_timestamp_str, action_timestamp_str))
                 result = cursor.fetchone()
                 return result[0] if result else 0
         finally:
@@ -121,6 +121,8 @@ class FeedbackLoopProcessor:
         action_timestamp_raw = action_data['timestamp']
         try:
             action_timestamp = datetime.fromisoformat(action_timestamp_raw.replace("Z", "+00:00"))
+            if action_timestamp.tzinfo is None:
+                action_timestamp = action_timestamp.replace(tzinfo=timezone.utc)
         except Exception:
             action_timestamp = datetime.now(timezone.utc)
         if datetime.now(timezone.utc) - action_timestamp > timedelta(minutes=10):
@@ -168,6 +170,8 @@ class FeedbackLoopProcessor:
         action_timestamp_raw = action_data['timestamp']
         try:
             action_timestamp = datetime.fromisoformat(action_timestamp_raw.replace("Z", "+00:00"))
+            if action_timestamp.tzinfo is None:
+                action_timestamp = action_timestamp.replace(tzinfo=timezone.utc)
         except Exception:
             action_timestamp = datetime.now(timezone.utc)
         if datetime.now(timezone.utc) - action_timestamp > timedelta(minutes=10):
