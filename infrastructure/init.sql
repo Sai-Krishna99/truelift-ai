@@ -10,6 +10,8 @@ CREATE TABLE IF NOT EXISTS promotions (
     end_date TIMESTAMP NOT NULL,
     is_active BOOLEAN DEFAULT true,
     predicted_sales INTEGER NOT NULL,
+    category VARCHAR(100) DEFAULT 'General',
+    price_sensitivity VARCHAR(20) DEFAULT 'medium',
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );

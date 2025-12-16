@@ -7,33 +7,33 @@ import { AlertTriangle, TrendingDown, DollarSign, Activity, XCircle, CheckCircle
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 const WS_URL = API_URL.replace('http', 'ws') + '/ws';
 
-  interface Alert {
-    alert_id: string;
-    promo_id: string;
-    product_name: string;
-    actual_sales: number;
-    predicted_sales: number;
-    loss_percentage: number;
-    loss_amount: number;
-    severity: string;
-    status: string;
-    alert_timestamp: string;
-    burst_id?: string;
-    demo_queued_at?: string;
-    burst_event_count?: number;
-    original_price?: number;
-    promo_price?: number;
-    discount_percentage?: number;
-    feedback_effectiveness?: number;
-    feedback_sales_before?: number;
-    feedback_sales_after?: number;
-    feedback_old_price?: number;
-    feedback_new_price?: number;
-    strategy?: {
-      explanation: string;
-      primary_recommendation: {
-        action: string;
-        details: string;
+interface Alert {
+  alert_id: string;
+  promo_id: string;
+  product_name: string;
+  actual_sales: number;
+  predicted_sales: number;
+  loss_percentage: number;
+  loss_amount: number;
+  severity: string;
+  status: string;
+  alert_timestamp: string;
+  burst_id?: string;
+  demo_queued_at?: string;
+  burst_event_count?: number;
+  original_price?: number;
+  promo_price?: number;
+  discount_percentage?: number;
+  feedback_effectiveness?: number;
+  feedback_sales_before?: number;
+  feedback_sales_after?: number;
+  feedback_old_price?: number;
+  feedback_new_price?: number;
+  strategy?: {
+    explanation: string;
+    primary_recommendation: {
+      action: string;
+      details: string;
       expected_impact: string;
     };
     alternatives: Array<{
@@ -321,15 +321,15 @@ export default function Home() {
     }
   };
 
-const getStatusBadge = (status: string) => {
-  switch (status) {
-    case 'action_taken':
-      return 'bg-amber-100 text-amber-800 border border-amber-200';
-    case 'strategy_generated':
-      return 'bg-blue-100 text-blue-800 border border-blue-200';
-    default:
-      return 'bg-gray-100 text-gray-800 border border-gray-200';
-  }
+  const getStatusBadge = (status: string) => {
+    switch (status) {
+      case 'action_taken':
+        return 'bg-amber-100 text-amber-800 border border-amber-200';
+      case 'strategy_generated':
+        return 'bg-blue-100 text-blue-800 border border-blue-200';
+      default:
+        return 'bg-gray-100 text-gray-800 border border-gray-200';
+    }
   };
 
   const filteredAlerts = alerts.filter(alert => {
@@ -391,9 +391,8 @@ const getStatusBadge = (status: string) => {
   return (
     <div className="min-h-screen bg-gray-50">
       {actionToast && (
-        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-sm ${
-          actionToast.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'
-        }`}>
+        <div className={`fixed top-4 right-4 z-50 px-4 py-3 rounded-lg shadow-lg border text-sm ${actionToast.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'
+          }`}>
           {actionToast.message}
         </div>
       )}
@@ -429,6 +428,80 @@ const getStatusBadge = (status: string) => {
         </div>
       </header>
 
+      {/* How This Works Section */}
+      <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-b border-blue-100">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-start gap-3">
+            <HelpCircle className="w-5 h-5 text-blue-600 mt-1 flex-shrink-0" />
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-gray-900 mb-3">How This Works</h3>
+              <div className="grid md:grid-cols-4 gap-4 text-sm">
+                <div className="bg-white rounded-lg p-3 border border-blue-100 shadow-sm">
+                  <div className="font-semibold text-blue-700 mb-1">1. Detection</div>
+                  <p className="text-gray-600">Virtual shoppers generate sales events. ML detector aggregates them every minute, comparing actual vs predicted sales.</p>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-blue-100 shadow-sm">
+                  <div className="font-semibold text-purple-700 mb-1">2. AI Analysis</div>
+                  <p className="text-gray-600">Gemini Pro analyzes alerts and generates strategic recommendations with confidence scores.</p>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-blue-100 shadow-sm">
+                  <div className="font-semibold text-green-700 mb-1">3. Take Action</div>
+                  <p className="text-gray-600">Execute recommendations: stop promotions, adjust pricing, or target specific segments.</p>
+                </div>
+                <div className="bg-white rounded-lg p-3 border border-blue-100 shadow-sm">
+                  <div className="font-semibold text-orange-700 mb-1">4. Feedback Loop</div>
+                  <p className="text-gray-600">System monitors action effectiveness, calculating impact on sales and revenue in real-time.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Action Legend */}
+      <div className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <details className="group">
+            <summary className="flex items-center justify-between cursor-pointer text-sm font-semibold text-gray-700 hover:text-gray-900">
+              <span className="flex items-center gap-2">
+                <Activity className="w-4 h-4" />
+                Action Guide - What Each Action Does
+              </span>
+              <ChevronRight className="w-4 h-4 transition-transform group-open:rotate-90" />
+            </summary>
+            <div className="mt-4 grid md:grid-cols-3 gap-4 text-sm">
+              <div className="bg-red-50 rounded-lg p-4 border border-red-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <XCircle className="w-5 h-5 text-red-600" />
+                  <span className="font-semibold text-red-900">Stop Promotion</span>
+                </div>
+                <p className="text-gray-700 mb-2">Immediately halt the promotion and revert to original pricing.</p>
+                <p className="text-xs text-gray-600"><strong>Best for:</strong> Deep cannibalization (&gt;40% loss), destroying profitability, or when the promo attracts only discount shoppers.</p>
+                <p className="text-xs text-green-700 mt-2"><strong>Expected:</strong> Reduce loss by 70-95%, restore normal margins.</p>
+              </div>
+              <div className="bg-amber-50 rounded-lg p-4 border border-amber-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <DollarSign className="w-5 h-5 text-amber-600" />
+                  <span className="font-semibold text-amber-900">Adjust Price</span>
+                </div>
+                <p className="text-gray-700 mb-2">Reduce discount depth by 10-20% to test price sensitivity without killing the promo.</p>
+                <p className="text-xs text-gray-600"><strong>Best for:</strong> Moderate cannibalization (20-40% loss), testing elasticity, or preserving promotion momentum.</p>
+                <p className="text-xs text-green-700 mt-2"><strong>Expected:</strong> Reduce loss by 30-50%, maintain some lift.</p>
+              </div>
+              <div className="bg-blue-50 rounded-lg p-4 border border-blue-100">
+                <div className="flex items-center gap-2 mb-2">
+                  <Activity className="w-5 h-5 text-blue-600" />
+                  <span className="font-semibold text-blue-900">Target Segments</span>
+                </div>
+                <p className="text-gray-700 mb-2">Restrict promo to loyalty members, new customers, or specific demographics.</p>
+                <p className="text-xs text-gray-600"><strong>Best for:</strong> Light cannibalization (&lt;20% loss), acquiring new customers, or when brand damage is a risk.</p>
+                <p className="text-xs text-green-700 mt-2"><strong>Expected:</strong> Reduce loss by 15-35%, improve targeting.</p>
+              </div>
+            </div>
+          </details>
+        </div>
+      </div>
+
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
         <div className="bg-white border rounded-lg p-4 shadow-sm flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
           <div>
@@ -462,6 +535,41 @@ const getStatusBadge = (status: string) => {
             <p>1) Click “Start Demo” to send a short burst of shopper events.</p>
             <p>2) Watch alerts tagged DEMO (1 per promo hit) with burst size and pricing context.</p>
             <p>3) Open an alert to see AI strategy; take an action (stop/adjust) to close the loop.</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
+        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 shadow-sm">
+          <p className="text-sm font-semibold text-purple-900 mb-3">📋 Action Legend - What Each Action Does</p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
+                <XCircle className="w-5 h-5 text-red-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-purple-900">Stop Promotion</p>
+                <p className="text-xs text-purple-700 mt-1">
+                  Immediately halts the promotion and reverts to original pricing. Use when cannibalization is severe and promotion is unprofitable.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-start gap-3">
+              <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
+                <DollarSign className="w-5 h-5 text-blue-600" />
+              </div>
+              <div>
+                <p className="text-sm font-semibold text-purple-900">Adjust Price</p>
+                <p className="text-xs text-purple-700 mt-1">
+                  Modifies the promotional price to find optimal balance. Increase price to reduce cannibalization or decrease to boost volume.
+                </p>
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 pt-3 border-t border-purple-200">
+            <p className="text-xs text-purple-600">
+              💡 <strong>Tip:</strong> After taking action, the system measures effectiveness in real-time and displays impact metrics (sales change, revenue impact).
+            </p>
           </div>
         </div>
       </div>
@@ -524,8 +632,8 @@ const getStatusBadge = (status: string) => {
           Alerts update live; events roll up into alerts per promo. DEMO tags show burst info; actions will reflect in real time.
         </div>
 
-          <div className="bg-white rounded-lg shadow">
-            <div className="px-6 py-4 border-b flex items-center justify-between">
+        <div className="bg-white rounded-lg shadow">
+          <div className="px-6 py-4 border-b flex items-center justify-between">
             <div className="flex items-center gap-2">
               <h2 className="text-xl font-semibold text-gray-900">Cannibalization Alerts</h2>
               <span title="Multiple events roll up into one alert per promo; DEMO shows burst info.">
@@ -601,36 +709,35 @@ const getStatusBadge = (status: string) => {
                   onClick={() => handleAlertClick(alert)}>
                   <div className="flex items-start justify-between">
                     <div className="flex-1">
-                    <div className="flex items-center gap-3 mb-2">
-                      <h3 className="text-lg font-semibold text-gray-900">{alert.product_name}</h3>
-                      {isDemoAlert(alert) && (
-                        <span
-                          title="DEMO burst events rolled up into this alert"
-                          className="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-200"
-                        >
-                          {formatDemoLabel(alert)}
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-semibold text-gray-900">{alert.product_name}</h3>
+                        {isDemoAlert(alert) && (
+                          <span
+                            title="DEMO burst events rolled up into this alert"
+                            className="px-2 py-1 text-xs font-semibold rounded bg-amber-100 text-amber-800 border border-amber-200"
+                          >
+                            {formatDemoLabel(alert)}
+                          </span>
+                        )}
+                        {(alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null || actionImpacts[alert.alert_id]) && (
+                          <span className={`px-2 py-1 text-xs font-semibold rounded border ${alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
+                              ? (alert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200')
+                              : actionImpacts[alert.alert_id]?.status === 'pending'
+                                ? 'bg-gray-100 text-gray-700 border-gray-200'
+                                : (actionImpacts[alert.alert_id]?.impact ?? 0) >= 0
+                                  ? 'bg-green-100 text-green-800 border-green-200'
+                                  : 'bg-red-100 text-red-800 border-red-200'
+                            }`}>
+                            {alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
+                              ? renderImpactBadgeText(alert)
+                              : renderImpactBadgeText(alert)}
+                          </span>
+                        )}
+                        <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
+                          {alert.severity.toUpperCase()}
                         </span>
-                      )}
-                      {(alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null || actionImpacts[alert.alert_id]) && (
-                        <span className={`px-2 py-1 text-xs font-semibold rounded border ${
-                          alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
-                            ? (alert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200')
-                            : actionImpacts[alert.alert_id]?.status === 'pending'
-                              ? 'bg-gray-100 text-gray-700 border-gray-200'
-                              : (actionImpacts[alert.alert_id]?.impact ?? 0) >= 0
-                                ? 'bg-green-100 text-green-800 border-green-200'
-                                : 'bg-red-100 text-red-800 border-red-200'
-                        }`}>
-                          {alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
-                            ? renderImpactBadgeText(alert)
-                            : renderImpactBadgeText(alert)}
-                        </span>
-                      )}
-                      <span className={`px-2 py-1 text-xs font-medium rounded border ${getSeverityColor(alert.severity)}`}>
-                        {alert.severity.toUpperCase()}
-                      </span>
-                      <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
-                        alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
+                        <span className={`px-2 py-1 text-xs font-medium rounded ${alert.status === 'strategy_generated' ? 'bg-blue-100 text-blue-800' :
+                          alert.status === 'action_taken' ? 'bg-amber-100 text-amber-800' :
                             'bg-gray-100 text-gray-800'
                           }`}>
                           {alert.status.replace('_', ' ').toUpperCase()}
@@ -715,21 +822,20 @@ const getStatusBadge = (status: string) => {
                   {selectedAlert.status.replace('_', ' ').toUpperCase()}
                 </span>
                 {(selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null) || actionImpacts[selectedAlert.alert_id] ? (
-                  <span className={`px-3 py-1 text-xs font-semibold rounded-full ${
-                    selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
+                  <span className={`px-3 py-1 text-xs font-semibold rounded-full ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
                       ? (selectedAlert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200')
                       : actionImpacts[selectedAlert.alert_id]?.status === 'pending'
                         ? 'bg-gray-100 text-gray-700 border border-gray-200'
                         : (actionImpacts[selectedAlert.alert_id]?.impact ?? 0) >= 0
                           ? 'bg-green-100 text-green-800 border border-green-200'
                           : 'bg-red-100 text-red-800 border border-red-200'
-                  }`}>
+                    }`}>
                     {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
                       ? renderImpactBadgeText(selectedAlert)
                       : renderImpactBadgeText(selectedAlert)}
                   </span>
                 ) : null}
-                      </div>
+              </div>
               <button onClick={() => setSelectedAlert(null)} className="text-gray-400 hover:text-gray-600">
                 <XCircle className="w-6 h-6" />
               </button>
@@ -750,8 +856,8 @@ const getStatusBadge = (status: string) => {
                 </p>
                 {(selectedAlert.original_price || selectedAlert.promo_price || selectedAlert.discount_percentage) && (
                   <p className="text-xs text-gray-600 mt-1">
-                    Pricing: {selectedAlert.original_price ? `Original $${selectedAlert.original_price.toFixed(2)}` : ''} 
-                    {selectedAlert.promo_price ? ` • Promo $${selectedAlert.promo_price.toFixed(2)}` : ''} 
+                    Pricing: {selectedAlert.original_price ? `Original $${selectedAlert.original_price.toFixed(2)}` : ''}
+                    {selectedAlert.promo_price ? ` • Promo $${selectedAlert.promo_price.toFixed(2)}` : ''}
                     {selectedAlert.discount_percentage ? ` • Discount ${selectedAlert.discount_percentage.toFixed(0)}%` : ''}
                   </p>
                 )}
@@ -766,7 +872,7 @@ const getStatusBadge = (status: string) => {
               )}
 
               {selectedAlert.strategy && (
-                  <div className="space-y-6">
+                <div className="space-y-6">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
                     <h5 className="font-semibold text-blue-900 mb-2">🤖 AI Explanation</h5>
                     <p className="text-sm text-blue-800">{selectedAlert.strategy.explanation}</p>
@@ -789,7 +895,7 @@ const getStatusBadge = (status: string) => {
                         <p className="text-xs text-gray-600 mt-1">{alt.details}</p>
                       </div>
                     ))}
-                      </div>
+                  </div>
 
                   {selectedAlert.status === 'pending' || selectedAlert.status === 'strategy_generated' ? (
                     <div className="pt-4 border-t">
@@ -839,28 +945,28 @@ const getStatusBadge = (status: string) => {
                     </div>
                   ) : selectedAlert.status === 'action_taken' ? (
                     <div className="pt-4 border-t">
-                        <div className={`${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'} rounded-lg p-4 text-center`}>
-                          <div className="flex items-center justify-center gap-2 font-medium text-sm">
-                            {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? (
-                              <span className="text-green-800">Impact measured</span>
-                            ) : (
-                              <>
-                                <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
-                                <span className="text-amber-800">Action recorded</span>
-                              </>
-                            )}
-                          </div>
-                          <p className={`text-xs mt-2 ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'text-green-700' : 'text-amber-700'}`}>
-                            {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
-                              ? renderImpactText(selectedAlert)
-                              : 'Waiting for feedback loop to evaluate impact.'}
-                          </p>
-                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null && (
-                            <p className="text-xs text-green-700 mt-1">
-                              Sales {selectedAlert.feedback_sales_before || 0} → {selectedAlert.feedback_sales_after || 0}; Price {selectedAlert.feedback_old_price ? `$${selectedAlert.feedback_old_price.toFixed(2)}` : ''} {selectedAlert.feedback_new_price ? `→ $${selectedAlert.feedback_new_price.toFixed(2)}` : ''}
-                            </p>
+                      <div className={`${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'} rounded-lg p-4 text-center`}>
+                        <div className="flex items-center justify-center gap-2 font-medium text-sm">
+                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? (
+                            <span className="text-green-800">Impact measured</span>
+                          ) : (
+                            <>
+                              <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
+                              <span className="text-amber-800">Action recorded</span>
+                            </>
                           )}
                         </div>
+                        <p className={`text-xs mt-2 ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'text-green-700' : 'text-amber-700'}`}>
+                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
+                            ? renderImpactText(selectedAlert)
+                            : 'Waiting for feedback loop to evaluate impact.'}
+                        </p>
+                        {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null && (
+                          <p className="text-xs text-green-700 mt-1">
+                            Sales {selectedAlert.feedback_sales_before || 0} → {selectedAlert.feedback_sales_after || 0}; Price {selectedAlert.feedback_old_price ? `$${selectedAlert.feedback_old_price.toFixed(2)}` : ''} {selectedAlert.feedback_new_price ? `→ $${selectedAlert.feedback_new_price.toFixed(2)}` : ''}
+                          </p>
+                        )}
+                      </div>
                     </div>
                   ) : null}
 

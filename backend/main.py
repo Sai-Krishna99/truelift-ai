@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-from datetime import datetime, timezone
+from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import redis
@@ -77,17 +77,6 @@ class AlertResponse(BaseModel):
     severity: str
     status: str
     alert_timestamp: str
-    burst_id: Optional[str] = None
-    demo_queued_at: Optional[str] = None
-    burst_event_count: Optional[int] = None
-    original_price: Optional[float] = None
-    promo_price: Optional[float] = None
-    discount_percentage: Optional[float] = None
-    feedback_effectiveness: Optional[float] = None
-    feedback_sales_before: Optional[int] = None
-    feedback_sales_after: Optional[int] = None
-    feedback_old_price: Optional[float] = None
-    feedback_new_price: Optional[float] = None
     strategy: Optional[Dict] = None
 
 
@@ -98,7 +87,8 @@ class UserActionRequest(BaseModel):
     action_details: Optional[Dict] = None
     performed_by: str = "manager"
 
-class DemoTriggerRequest(BaseModel):
+
+class DemoBurstRequest(BaseModel):
     burst_size: int = 6
 
 
@@ -114,26 +104,6 @@ class PromotionResponse(BaseModel):
 
 def get_db_connection():
     return psycopg2.connect(**DB_CONFIG)
-
-
-def _iso_with_z(dt_obj):
-    if not dt_obj:
-        return None
-    if dt_obj.tzinfo is None:
-        dt_obj = dt_obj.replace(tzinfo=timezone.utc)
-    else:
-        dt_obj = dt_obj.astimezone(timezone.utc)
-    return dt_obj.isoformat().replace("+00:00", "Z")
-
-
-def _set_promo_cache(promo_id: str, promo_price: float, is_active: bool = True):
-    try:
-        redis_client.hset(f"promotion:{promo_id}", mapping={
-            "promo_price": promo_price,
-            "is_active": json.dumps(is_active)
-        })
-    except Exception:
-        pass
 
 
 @app.get("/")
@@ -163,27 +133,23 @@ async def get_alerts(status: Optional[str] = None, limit: int = 50):
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             if status:
                 cursor.execute("""
-                    SELECT ca.*, p.original_price, p.promo_price, p.discount_percentage
-                    FROM cannibalization_alerts ca
-                    LEFT JOIN promotions p ON ca.promo_id = p.promo_id
-                    WHERE ca.status = %s 
+                    SELECT * FROM cannibalization_alerts 
+                    WHERE status = %s 
                     ORDER BY alert_timestamp DESC 
                     LIMIT %s
                 """, (status, limit))
             else:
                 # Prioritize showing alerts with strategies, then pending
                 cursor.execute("""
-                    SELECT ca.*, p.original_price, p.promo_price, p.discount_percentage
-                    FROM cannibalization_alerts ca
-                    LEFT JOIN promotions p ON ca.promo_id = p.promo_id
+                    SELECT * FROM cannibalization_alerts 
                     ORDER BY 
                         CASE 
-                            WHEN ca.status = 'strategy_generated' THEN 1
-                            WHEN ca.status = 'pending' THEN 2
-                            WHEN ca.status = 'action_taken' THEN 3
+                            WHEN status = 'strategy_generated' THEN 1
+                            WHEN status = 'pending' THEN 2
+                            WHEN status = 'action_taken' THEN 3
                             ELSE 4
                         END,
-                        ca.alert_timestamp DESC 
+                        alert_timestamp DESC 
                     LIMIT %s
                 """, (limit,))
             
@@ -191,33 +157,11 @@ async def get_alerts(status: Optional[str] = None, limit: int = 50):
             
             for alert in alerts:
                 if 'alert_timestamp' in alert and alert['alert_timestamp']:
-                    alert['alert_timestamp'] = _iso_with_z(alert['alert_timestamp'])
+                    alert['alert_timestamp'] = alert['alert_timestamp'].isoformat()
                 
                 strategy_json = redis_client.get(f"strategy:{alert['alert_id']}")
                 if strategy_json:
                     alert['strategy'] = json.loads(strategy_json)
-
-                demo_json = redis_client.get(f"alert_demo:{alert['alert_id']}")
-                if demo_json:
-                    try:
-                        demo_data = json.loads(demo_json)
-                        alert['burst_id'] = demo_data.get('burst_id')
-                        alert['demo_queued_at'] = demo_data.get('demo_queued_at')
-                        alert['burst_event_count'] = demo_data.get('burst_event_count')
-                    except Exception:
-                        pass
-
-                feedback_json = redis_client.get(f"feedback:{alert['alert_id']}")
-                if feedback_json:
-                    try:
-                        fb = json.loads(feedback_json)
-                        alert['feedback_effectiveness'] = fb.get('effectiveness_score')
-                        alert['feedback_sales_before'] = fb.get('sales_before')
-                        alert['feedback_sales_after'] = fb.get('sales_after')
-                        alert['feedback_old_price'] = fb.get('old_price')
-                        alert['feedback_new_price'] = fb.get('new_price')
-                    except Exception:
-                        pass
             
             return [dict(alert) for alert in alerts]
     finally:
@@ -230,11 +174,9 @@ async def get_alert(alert_id: str):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
-                SELECT ca.*, s.explanation, s.recommended_action, s.alternative_actions, s.confidence_score,
-                       p.original_price, p.promo_price, p.discount_percentage
+                SELECT ca.*, s.explanation, s.recommended_action, s.alternative_actions, s.confidence_score
                 FROM cannibalization_alerts ca
                 LEFT JOIN ai_strategies s ON ca.alert_id = s.alert_id
-                LEFT JOIN promotions p ON ca.promo_id = p.promo_id
                 WHERE ca.alert_id = %s
             """, (alert_id,))
             
@@ -246,7 +188,7 @@ async def get_alert(alert_id: str):
             
             # Convert datetime to ISO string
             if 'alert_timestamp' in alert_dict and alert_dict['alert_timestamp']:
-                alert_dict['alert_timestamp'] = _iso_with_z(alert_dict['alert_timestamp'])
+                alert_dict['alert_timestamp'] = alert_dict['alert_timestamp'].isoformat()
             
             if alert_dict.get('recommended_action'):
                 recommended = alert_dict.pop('recommended_action')
@@ -257,28 +199,6 @@ async def get_alert(alert_id: str):
                     'alternatives': alternatives if isinstance(alternatives, list) else json.loads(alternatives),
                     'confidence_score': float(alert_dict.pop('confidence_score'))
                 }
-
-            demo_json = redis_client.get(f"alert_demo:{alert_id}")
-            if demo_json:
-                try:
-                    demo_data = json.loads(demo_json)
-                    alert_dict['burst_id'] = demo_data.get('burst_id')
-                    alert_dict['demo_queued_at'] = demo_data.get('demo_queued_at')
-                    alert_dict['burst_event_count'] = demo_data.get('burst_event_count')
-                except Exception:
-                    pass
-
-            feedback_json = redis_client.get(f"feedback:{alert_id}")
-            if feedback_json:
-                try:
-                    fb = json.loads(feedback_json)
-                    alert_dict['feedback_effectiveness'] = fb.get('effectiveness_score')
-                    alert_dict['feedback_sales_before'] = fb.get('sales_before')
-                    alert_dict['feedback_sales_after'] = fb.get('sales_after')
-                    alert_dict['feedback_old_price'] = fb.get('old_price')
-                    alert_dict['feedback_new_price'] = fb.get('new_price')
-                except Exception:
-                    pass
             
             return alert_dict
     finally:
@@ -313,23 +233,6 @@ async def create_user_action(action: UserActionRequest):
     
     conn = get_db_connection()
     try:
-        # Fetch current promo pricing for context
-        current_promo_price = None
-        with conn.cursor(cursor_factory=RealDictCursor) as cursor:
-            cursor.execute("SELECT promo_price FROM promotions WHERE promo_id = %s", (action.promo_id,))
-            row = cursor.fetchone()
-            if row:
-                current_promo_price = float(row['promo_price'])
-
-        new_price = None
-        if action.action_type == "adjust_price":
-            if not action.action_details or action.action_details.get("new_price") is None:
-                raise HTTPException(status_code=400, detail="new_price is required for adjust_price")
-            try:
-                new_price = float(action.action_details["new_price"])
-            except Exception:
-                raise HTTPException(status_code=400, detail="Invalid new_price")
-
         with conn.cursor() as cursor:
             cursor.execute("""
                 INSERT INTO user_actions 
@@ -351,19 +254,10 @@ async def create_user_action(action: UserActionRequest):
                     SET is_active = false, updated_at = %s 
                     WHERE promo_id = %s
                 """, (datetime.utcnow(), action.promo_id))
-                _set_promo_cache(action.promo_id, current_promo_price or 0, is_active=False)
-            
-            if action.action_type == "adjust_price" and new_price is not None:
-                cursor.execute("""
-                    UPDATE promotions 
-                    SET promo_price = %s, updated_at = %s 
-                    WHERE promo_id = %s
-                """, (new_price, datetime.utcnow(), action.promo_id))
-                _set_promo_cache(action.promo_id, new_price, is_active=True)
             
             cursor.execute("""
                 UPDATE cannibalization_alerts 
-                SET status = 'action_taken' 
+                SET status = 'resolved' 
                 WHERE alert_id = %s
             """, (action.alert_id,))
             
@@ -374,10 +268,7 @@ async def create_user_action(action: UserActionRequest):
             'alert_id': action.alert_id,
             'promo_id': action.promo_id,
             'action_type': action.action_type,
-            'timestamp': _iso_with_z(datetime.utcnow()),
-            'status': 'action_taken',
-            'old_price': current_promo_price,
-            'new_price': new_price
+            'timestamp': datetime.utcnow().isoformat()
         }
         kafka_producer.send('user-actions', value=feedback_data)
         
@@ -389,7 +280,7 @@ async def create_user_action(action: UserActionRequest):
         return {
             "action_id": action_id,
             "status": "success",
-            "message": f"Action executed successfully"
+            "message": f"Action '{action.action_type}' executed successfully"
         }
     except Exception as e:
         conn.rollback()
@@ -472,15 +363,39 @@ async def get_recent_actions(limit: int = 10):
                 LIMIT %s
             """, (limit,))
             
-            rows = []
-            for row in cursor.fetchall():
-                rec = dict(row)
-                if rec.get('action_timestamp'):
-                    rec['action_timestamp'] = _iso_with_z(rec['action_timestamp'])
-                rows.append(rec)
-            return rows
+            return [dict(row) for row in cursor.fetchall()]
     finally:
         conn.close()
+
+
+@app.post("/demo/trigger")
+async def trigger_demo_burst(request: DemoBurstRequest):
+    """
+    Trigger a demo burst by sending a message to Redis.
+    Virtual shoppers will pick it up and generate a burst of events.
+    """
+    try:
+        burst_id = f"BURST-{uuid.uuid4().hex[:8]}"
+        burst_data = {
+            'burst_id': burst_id,
+            'burst_size': request.burst_size,
+            'queued_at': datetime.utcnow().isoformat()
+        }
+        
+        # Push to Redis queue for virtual shoppers to consume
+        redis_client.lpush('demo:burst', json.dumps(burst_data))
+        
+        logger.info(f"Demo burst triggered: {burst_id} with size {request.burst_size}")
+        
+        return {
+            "status": "success",
+            "burst_id": burst_id,
+            "burst_size": request.burst_size,
+            "message": f"Demo burst {burst_id} queued successfully"
+        }
+    except Exception as e:
+        logger.error(f"Error triggering demo burst: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to trigger demo: {str(e)}")
 
 
 @app.websocket("/ws")
@@ -491,39 +406,6 @@ async def websocket_endpoint(websocket: WebSocket):
             await websocket.receive_text()
     except WebSocketDisconnect:
         manager.disconnect(websocket)
-
-
-@app.post("/internal/broadcast-alert")
-async def broadcast_alert(alert_data: dict):
-    """Internal endpoint for services to broadcast new alerts to WebSocket clients"""
-    try:
-        await manager.broadcast({
-            'type': 'new_alert',
-            'data': alert_data
-        })
-        logger.info(f"Broadcasted alert {alert_data.get('alert_id')} to {len(manager.active_connections)} clients")
-        return {"status": "broadcasted", "clients": len(manager.active_connections)}
-    except Exception as e:
-        logger.error(f"Error broadcasting alert: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-
-@app.post("/demo/trigger")
-async def trigger_demo(burst: DemoTriggerRequest):
-    """Queue a small demo burst for the simulator (only active when DEMO_MODE=true)."""
-    try:
-        burst_size = max(1, min(20, burst.burst_size))
-        queued_at = _iso_with_z(datetime.utcnow().replace(tzinfo=timezone.utc))
-        burst_id = f"DEMO-{uuid.uuid4().hex[:10]}"
-        redis_client.rpush("demo:burst", json.dumps({
-            "burst_id": burst_id,
-            "burst_size": burst_size,
-            "queued_at": queued_at
-        }))
-        return {"status": "queued", "burst_size": burst_size, "queued_at": queued_at, "burst_id": burst_id}
-    except Exception as e:
-        logger.error(f"Error queuing demo burst: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":

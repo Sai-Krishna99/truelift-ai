@@ -21,6 +21,7 @@ class Product:
     original_price: float
     category: str
     base_demand: int
+    price_sensitivity: str = "medium"  # high, medium, low
 
 
 @dataclass
@@ -56,6 +57,9 @@ class VirtualShopperSimulator:
         self.redis_host = os.getenv('REDIS_HOST', 'localhost')
         self.redis_port = int(os.getenv('REDIS_PORT', 6379))
         self.demo_mode = os.getenv('DEMO_MODE', 'false').lower() == 'true'
+        self.simulation_enabled = os.getenv('SIMULATION_ENABLED', 'true').lower() == 'true'
+        self.event_rate = int(os.getenv('EVENT_RATE_PER_MINUTE', '15'))  # Events per promo per minute
+        self.paused = False
         
         self.producer = KafkaProducer(
             bootstrap_servers=self.kafka_bootstrap_servers,
@@ -73,25 +77,94 @@ class VirtualShopperSimulator:
         self.active_shoppers = set()
 
     def _initialize_products(self) -> List[Product]:
+        """Initialize diverse product catalog across 6 major categories"""
         return [
-            Product("P001", "Premium Coffee Beans", 25.99, "Beverages", 100),
-            Product("P002", "Organic Protein Powder", 49.99, "Health", 80),
-            Product("P003", "Smart Watch Series X", 299.99, "Electronics", 50),
-            Product("P004", "Designer Sunglasses", 149.99, "Fashion", 60),
-            Product("P005", "Wireless Earbuds Pro", 179.99, "Electronics", 90),
-            Product("P006", "Gourmet Snack Box", 59.99, "Grocery", 70),
-            Product("P007", "Eco Home Starter Kit", 89.99, "Home", 55),
-            Product("P008", "Running Shoes Elite", 129.99, "Sports", 85),
+            # FOOD & BEVERAGE - High price sensitivity (elastic demand)
+            Product("P001", "Premium Coffee Beans 1kg", 24.99, "Food & Beverage", 120, "high"),
+            Product("P002", "Energy Drink 12-Pack", 18.99, "Food & Beverage", 200, "high"),
+            Product("P003", "Artisan Dark Chocolate Bar", 8.99, "Food & Beverage", 150, "high"),
+            Product("P004", "Organic Protein Bars 12ct", 29.99, "Food & Beverage", 95, "medium"),
+            Product("P005", "Gourmet Tea Sampler", 34.99, "Food & Beverage", 85, "medium"),
+            
+            # HOME & LIVING - Medium-high price sensitivity
+            Product("P006", "Scented Candle Set 3pk", 32.99, "Home & Living", 110, "medium"),
+            Product("P007", "Kitchen Knife Set Premium", 79.99, "Home & Living", 65, "medium"),
+            Product("P008", "Throw Blanket Luxury", 49.99, "Home & Living", 88, "medium"),
+            Product("P009", "Coffee Maker 12-Cup", 89.99, "Home & Living", 72, "low"),
+            Product("P010", "Wall Art Canvas Set", 119.99, "Home & Living", 45, "low"),
+            
+            # FASHION - Medium price sensitivity (brand matters)
+            Product("P011", "Designer Sunglasses", 149.99, "Fashion", 58, "low"),
+            Product("P012", "Leather Wallet Premium", 69.99, "Fashion", 82, "medium"),
+            Product("P013", "Cashmere Scarf", 89.99, "Fashion", 67, "medium"),
+            Product("P014", "Designer Watch", 299.99, "Fashion", 38, "low"),
+            Product("P015", "Leather Handbag", 189.99, "Fashion", 52, "low"),
+            
+            # ELECTRONICS - Low-medium price sensitivity (research-driven)
+            Product("P016", "Wireless Earbuds Pro", 129.99, "Electronics", 95, "medium"),
+            Product("P017", "Smart Watch Fitness", 199.99, "Electronics", 68, "low"),
+            Product("P018", "Bluetooth Speaker Portable", 79.99, "Electronics", 110, "medium"),
+            Product("P019", "Noise-Cancel Headphones", 249.99, "Electronics", 55, "low"),
+            Product("P020", "Tablet 10-inch", 329.99, "Electronics", 48, "low"),
+            Product("P021", "Webcam 4K", 149.99, "Electronics", 72, "medium"),
+            Product("P022", "Mechanical Keyboard RGB", 99.99, "Electronics", 85, "medium"),
+            
+            # HEALTH & BEAUTY - Medium-high price sensitivity
+            Product("P023", "Skincare Set Anti-Aging", 89.99, "Health & Beauty", 92, "medium"),
+            Product("P024", "Hair Dryer Professional", 129.99, "Health & Beauty", 68, "medium"),
+            Product("P025", "Electric Toothbrush", 79.99, "Health & Beauty", 105, "high"),
+            Product("P026", "Massage Gun Deep Tissue", 149.99, "Health & Beauty", 75, "medium"),
+            Product("P027", "Essential Oils Gift Set", 49.99, "Health & Beauty", 115, "high"),
+            
+            # SPORTS & FITNESS - Medium price sensitivity
+            Product("P028", "Yoga Mat Premium Non-Slip", 49.99, "Sports & Fitness", 125, "high"),
+            Product("P029", "Resistance Bands Set", 34.99, "Sports & Fitness", 140, "high"),
+            Product("P030", "Dumbbell Set 20lb", 119.99, "Sports & Fitness", 62, "medium"),
+            Product("P031", "Running Shoes Pro", 139.99, "Sports & Fitness", 88, "medium"),
+            Product("P032", "Gym Bag Large", 59.99, "Sports & Fitness", 95, "high"),
+            
+            # PREMIUM ELECTRONICS - Low price sensitivity (brand loyal)
+            Product("P033", "Smart Home Hub Bundle", 279.99, "Electronics", 42, "low"),
+            Product("P034", "Robot Vacuum Premium", 449.99, "Electronics", 35, "low"),
+            Product("P035", "4K Action Camera Waterproof", 349.99, "Electronics", 48, "low"),
         ]
 
     def _initialize_promotions(self) -> List[Promotion]:
+        """Initialize promotions with varied discounts based on price sensitivity"""
         now = datetime.utcnow()
         promotions = []
         
-        # Use tighter predicted ranges to allow losses when demand dips
-        base_predictions = [40, 50, 35, 38, 26, 22, 28, 30]
-        for i, (product, predicted) in enumerate(zip(self.products, base_predictions)):
-            discount = random.choice([20, 30, 40, 50])
+        # Discount strategies based on price tiers
+        # Low-price items: higher discounts (30-70%) to drive volume
+        # Mid-price items: moderate discounts (20-50%)
+        # High-price items: conservative discounts (15-40%)
+        # Premium items: minimal discounts (10-30%)
+        
+        discount_ranges = {
+            'low': [30, 40, 50, 60, 70],      # $5-$25
+            'mid': [20, 30, 40, 50],           # $25-$100
+            'high': [15, 25, 30, 40],          # $100-$200
+            'premium': [10, 15, 20, 25, 30]    # $200-$500
+        }
+        
+        for i, product in enumerate(self.products):
+            # Determine price tier and discount range
+            if product.original_price < 25:
+                tier = 'low'
+                # Higher base demand, more variance
+                predicted = int(product.base_demand * random.uniform(0.35, 0.55))
+            elif product.original_price < 100:
+                tier = 'mid'
+                predicted = int(product.base_demand * random.uniform(0.40, 0.60))
+            elif product.original_price < 200:
+                tier = 'high'
+                predicted = int(product.base_demand * random.uniform(0.45, 0.65))
+            else:
+                tier = 'premium'
+                # Lower base demand, less variance
+                predicted = int(product.base_demand * random.uniform(0.50, 0.70))
+            
+            discount = random.choice(discount_ranges[tier])
             promo_price = product.original_price * (1 - discount / 100)
             
             promo = Promotion(
@@ -103,7 +176,7 @@ class VirtualShopperSimulator:
                 discount_percentage=discount,
                 start_date=now,
                 end_date=now + timedelta(days=7),
-                predicted_sales=predicted
+                predicted_sales=max(10, predicted)  # Ensure minimum of 10
             )
             promotions.append(promo)
             
@@ -115,7 +188,33 @@ class VirtualShopperSimulator:
         return shopper_id
 
     def _should_cannibalize(self, promotion: Promotion) -> bool:
-        return random.random() < 0.35
+        """Determine cannibalization based on price sensitivity and discount depth
+        High sensitivity + deep discount = higher cannibalization risk
+        Low sensitivity + shallow discount = lower cannibalization risk
+        """
+        # Find product to get price sensitivity
+        product = next((p for p in self.products if p.product_id == promotion.product_id), None)
+        if not product:
+            return random.random() < 0.30  # Default fallback
+        
+        # Base cannibalization rates by price sensitivity
+        sensitivity_rates = {
+            'high': 0.50,    # Food, fitness items - very price elastic
+            'medium': 0.35,  # Fashion, home goods - moderately elastic
+            'low': 0.20      # Electronics, premium goods - less elastic
+        }
+        
+        base_rate = sensitivity_rates.get(product.price_sensitivity, 0.35)
+        
+        # Adjust based on discount depth (deeper discounts = more cannibalization)
+        discount_multiplier = 1.0
+        if promotion.discount_percentage > 40:
+            discount_multiplier = 1.3  # Deep discount increases risk
+        elif promotion.discount_percentage > 25:
+            discount_multiplier = 1.15
+        
+        final_rate = min(0.65, base_rate * discount_multiplier)  # Cap at 65%
+        return random.random() < final_rate
 
     def _generate_shopping_event(self, promotion: Promotion) -> ShoppingEvent:
         shopper_id = self._generate_shopper_id()
@@ -220,11 +319,23 @@ class VirtualShopperSimulator:
                     await asyncio.sleep(2)
                 continue
 
+            # Check if simulation is enabled (cost control)
+            if not self.simulation_enabled:
+                logger.info("Simulation paused (SIMULATION_ENABLED=false)")
+                await asyncio.sleep(30)  # Check every 30 seconds
+                # Reload config from env (allows runtime toggling via Cloud Run env update)
+                self.simulation_enabled = os.getenv('SIMULATION_ENABLED', 'true').lower() == 'true'
+                continue
+            
             for promotion in self.promotions:
-                events_per_minute = random.randint(5, 10)
+                # Use configurable event rate
+                events_per_minute = random.randint(
+                    max(1, self.event_rate - 5), 
+                    self.event_rate + 5
+                )
                 # Occasionally create a dip to trigger cannibalization
                 if random.random() < 0.3:
-                    events_per_minute = random.randint(1, 4)
+                    events_per_minute = random.randint(1, max(2, events_per_minute // 3))
                 
                 for _ in range(events_per_minute):
                     try:
