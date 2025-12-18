@@ -29,6 +29,7 @@ interface Alert {
   feedback_sales_after?: number;
   feedback_old_price?: number;
   feedback_new_price?: number;
+  feedback_insufficient_data?: boolean;
   strategy?: {
     explanation: string;
     primary_recommendation: {
@@ -146,6 +147,11 @@ export default function Home() {
       });
       return next;
     });
+    setSelectedAlert((prev) => {
+      if (!prev) return prev;
+      const updated = alerts.find(a => a.alert_id === prev.alert_id);
+      return updated ? { ...prev, ...updated } : prev;
+    });
   }, [alerts]);
 
   useEffect(() => {
@@ -175,6 +181,44 @@ export default function Home() {
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
         console.log('WebSocket message:', message);
+
+        if (message.type === 'feedback') {
+          const data = message.data || {};
+          const {
+            alert_id,
+            effectiveness_score,
+            sales_before,
+            sales_after,
+            old_price,
+            new_price,
+            status,
+          } = data;
+          setActionImpacts(prev => ({
+            ...prev,
+            [alert_id]: { status: 'measured', impact: effectiveness_score, actionType: prev[alert_id]?.actionType }
+          }));
+          setAlerts(prev => prev.map(a => a.alert_id === alert_id ? {
+            ...a,
+            feedback_effectiveness: effectiveness_score,
+            feedback_sales_before: sales_before,
+            feedback_sales_after: sales_after,
+            feedback_old_price: old_price,
+            feedback_new_price: new_price,
+            feedback_insufficient_data: data?.insufficient_data,
+            status: status || a.status,
+          } : a));
+          setSelectedAlert(prev => prev && prev.alert_id === alert_id ? {
+            ...prev,
+            feedback_effectiveness: effectiveness_score,
+            feedback_sales_before: sales_before,
+            feedback_sales_after: sales_after,
+            feedback_old_price: old_price,
+            feedback_new_price: new_price,
+            feedback_insufficient_data: data?.insufficient_data,
+            status: status || prev.status,
+          } : prev);
+          return;
+        }
 
         if (message.type === 'action_taken' || message.type === 'new_alert') {
           fetchData();
@@ -742,7 +786,7 @@ export default function Home() {
                           }`}>
                           {alert.status.replace('_', ' ').toUpperCase()}
                         </span>
-                      </div>
+                  </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
                         <div>
@@ -763,11 +807,12 @@ export default function Home() {
                         </div>
                       </div>
 
-                      {(alert.original_price || alert.promo_price || alert.discount_percentage) && (
-                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-3 text-xs text-gray-600">
-                          {alert.original_price && <span>Original: ${alert.original_price.toFixed(2)}</span>}
-                          {alert.promo_price && <span>Promo: ${alert.promo_price.toFixed(2)}</span>}
-                          {alert.discount_percentage && <span>Discount: {alert.discount_percentage.toFixed(0)}%</span>}
+                      {(alert.original_price !== undefined || alert.promo_price !== undefined || alert.discount_percentage !== undefined || alert.burst_id) && (
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-4 mt-3 text-xs text-gray-700">
+                          {alert.original_price !== undefined && <span><strong>Original:</strong> ${alert.original_price.toFixed(2)}</span>}
+                          {alert.promo_price !== undefined && <span><strong>Promo:</strong> ${alert.promo_price.toFixed(2)}</span>}
+                          {alert.discount_percentage !== undefined && <span><strong>Discount:</strong> {alert.discount_percentage.toFixed(0)}%</span>}
+                          {alert.burst_id && <span className="text-amber-700"><strong>Demo:</strong> {alert.burst_id}{alert.burst_event_count ? ` • ${alert.burst_event_count} events` : ''}</span>}
                         </div>
                       )}
 
@@ -854,20 +899,56 @@ export default function Home() {
                     </span>
                   )}
                 </p>
-                {(selectedAlert.original_price || selectedAlert.promo_price || selectedAlert.discount_percentage) && (
-                  <p className="text-xs text-gray-600 mt-1">
-                    Pricing: {selectedAlert.original_price ? `Original $${selectedAlert.original_price.toFixed(2)}` : ''}
-                    {selectedAlert.promo_price ? ` • Promo $${selectedAlert.promo_price.toFixed(2)}` : ''}
-                    {selectedAlert.discount_percentage ? ` • Discount ${selectedAlert.discount_percentage.toFixed(0)}%` : ''}
-                  </p>
+                {(selectedAlert.original_price !== undefined || selectedAlert.promo_price !== undefined || selectedAlert.discount_percentage !== undefined || selectedAlert.demo_queued_at) && (
+                  <div className="text-xs text-gray-700 mt-2 space-y-1">
+                    <div className="font-semibold text-gray-800">Pricing</div>
+                    <div className="flex flex-wrap gap-3">
+                      {selectedAlert.original_price !== undefined && <span>Original: ${selectedAlert.original_price.toFixed(2)}</span>}
+                      {selectedAlert.promo_price !== undefined && <span>Promo: ${selectedAlert.promo_price.toFixed(2)}</span>}
+                      {selectedAlert.discount_percentage !== undefined && <span>Discount: {selectedAlert.discount_percentage.toFixed(0)}%</span>}
+                    </div>
+                    {selectedAlert.demo_queued_at && (
+                      <div className="text-amber-700">Queued: {formatTimestamp(selectedAlert.demo_queued_at)}</div>
+                    )}
+                  </div>
                 )}
               </div>
 
-              {actionResult && selectedAlert.alert_id === actionResult.alertId && (
+              {actionResult && selectedAlert.alert_id === actionResult.alertId && !selectedAlert.feedback_effectiveness && (
                 <div className={`mb-6 p-4 rounded-lg ${actionResult.type === 'success' ? 'bg-green-50 border border-green-200' : 'bg-red-50 border border-red-200'}`}>
                   <p className={`text-sm font-medium ${actionResult.type === 'success' ? 'text-green-800' : 'text-red-800'}`}>
                     {actionResult.message}
                   </p>
+                </div>
+              )}
+
+              {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null && (
+                <div className={`mb-6 p-4 rounded-lg ${selectedAlert.feedback_insufficient_data ? 'bg-amber-50 border border-amber-200' : 'bg-green-50 border border-green-200'}`}>
+                  <div className="flex items-center gap-2 font-semibold text-sm mb-2">
+                    {selectedAlert.feedback_insufficient_data ? (
+                      <>
+                        <RefreshCw className="w-4 h-4 text-amber-700" />
+                        <span className="text-amber-800">Impact measured (low data)</span>
+                      </>
+                    ) : (
+                      <>
+                        <CheckCircle className="w-4 h-4 text-green-700" />
+                        <span className="text-green-800">Impact measured</span>
+                      </>
+                    )}
+                  </div>
+                  <div className={`${selectedAlert.feedback_insufficient_data ? 'text-amber-800' : 'text-green-800'} text-sm`}>
+                    Impact {selectedAlert.feedback_effectiveness.toFixed(1)}%
+                  </div>
+                  <div className={`${selectedAlert.feedback_insufficient_data ? 'text-amber-700' : 'text-green-700'} text-xs mt-1 space-y-1`}>
+                    <div>Sales: {selectedAlert.feedback_sales_before ?? 0} → {selectedAlert.feedback_sales_after ?? 0}</div>
+                    {(selectedAlert.feedback_old_price !== undefined || selectedAlert.feedback_new_price !== undefined) && (
+                      <div>Price: {selectedAlert.feedback_old_price !== undefined ? `$${selectedAlert.feedback_old_price.toFixed(2)}` : 'n/a'} → {selectedAlert.feedback_new_price !== undefined ? `$${selectedAlert.feedback_new_price.toFixed(2)}` : 'n/a'}</div>
+                    )}
+                  </div>
+                  {selectedAlert.feedback_insufficient_data && (
+                    <div className="text-xs text-amber-700 mt-1">Limited post-action data; effectiveness is an estimate.</div>
+                  )}
                 </div>
               )}
 
@@ -897,7 +978,7 @@ export default function Home() {
                     ))}
                   </div>
 
-                  {selectedAlert.status === 'pending' || selectedAlert.status === 'strategy_generated' ? (
+                  {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? null : selectedAlert.status === 'pending' || selectedAlert.status === 'strategy_generated' ? (
                     <div className="pt-4 border-t">
                       <h5 className="font-semibold text-gray-900 mb-3">⚡ Execute Action</h5>
                       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 items-start">
@@ -943,31 +1024,20 @@ export default function Home() {
                         Actions will be published to Kafka and processed by the feedback loop system
                       </p>
                     </div>
-                  ) : selectedAlert.status === 'action_taken' ? (
-                    <div className="pt-4 border-t">
-                      <div className={`${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'bg-green-50 border border-green-200' : 'bg-amber-50 border border-amber-200'} rounded-lg p-4 text-center`}>
-                        <div className="flex items-center justify-center gap-2 font-medium text-sm">
-                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? (
-                            <span className="text-green-800">Impact measured</span>
-                          ) : (
-                            <>
-                              <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
-                              <span className="text-amber-800">Action recorded</span>
-                            </>
-                          )}
-                        </div>
-                        <p className={`text-xs mt-2 ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? 'text-green-700' : 'text-amber-700'}`}>
-                          {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
-                            ? renderImpactText(selectedAlert)
-                            : 'Waiting for feedback loop to evaluate impact.'}
-                        </p>
-                        {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null && (
-                          <p className="text-xs text-green-700 mt-1">
-                            Sales {selectedAlert.feedback_sales_before || 0} → {selectedAlert.feedback_sales_after || 0}; Price {selectedAlert.feedback_old_price ? `$${selectedAlert.feedback_old_price.toFixed(2)}` : ''} {selectedAlert.feedback_new_price ? `→ $${selectedAlert.feedback_new_price.toFixed(2)}` : ''}
+                  ) : selectedAlert.status === 'action_taken' || selectedAlert.status === 'resolved' ? (
+                    selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null ? null : (
+                      <div className="pt-4 border-t">
+                        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 text-center">
+                          <div className="flex items-center justify-center gap-2 font-medium text-sm">
+                            <RefreshCw className="w-4 h-4 animate-spin text-amber-700" />
+                            <span className="text-amber-800">Action recorded</span>
+                          </div>
+                          <p className="text-xs mt-2 text-amber-700">
+                            Waiting for feedback loop to evaluate impact.
                           </p>
-                        )}
+                        </div>
                       </div>
-                    </div>
+                    )
                   ) : null}
 
                   <div className="pt-6 border-t mt-6">

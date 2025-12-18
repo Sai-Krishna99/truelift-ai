@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict
-from datetime import datetime
+from datetime import datetime, timezone
 import psycopg2
 from psycopg2.extras import RealDictCursor
 import redis
@@ -44,6 +44,23 @@ kafka_producer = KafkaProducer(
 )
 
 
+def _attach_feedback(alert: dict) -> dict:
+    """Augment alert dict with cached feedback if present in Redis."""
+    feedback_json = redis_client.get(f"feedback:{alert['alert_id']}")
+    if feedback_json:
+        try:
+            feedback = json.loads(feedback_json)
+            alert['feedback_effectiveness'] = feedback.get('effectiveness_score')
+            alert['feedback_sales_before'] = feedback.get('sales_before')
+            alert['feedback_sales_after'] = feedback.get('sales_after')
+            alert['feedback_old_price'] = feedback.get('old_price')
+            alert['feedback_new_price'] = feedback.get('new_price')
+            alert['feedback_insufficient_data'] = feedback.get('insufficient_data')
+        except Exception as e:
+            logger.warning(f"Failed to parse feedback cache for {alert['alert_id']}: {e}")
+    return alert
+
+
 class ConnectionManager:
     def __init__(self):
         self.active_connections: List[WebSocket] = []
@@ -77,6 +94,17 @@ class AlertResponse(BaseModel):
     severity: str
     status: str
     alert_timestamp: str
+    original_price: Optional[float] = None
+    promo_price: Optional[float] = None
+    discount_percentage: Optional[float] = None
+    burst_id: Optional[str] = None
+    demo_queued_at: Optional[str] = None
+    burst_event_count: Optional[int] = None
+    feedback_effectiveness: Optional[float] = None
+    feedback_sales_before: Optional[int] = None
+    feedback_sales_after: Optional[int] = None
+    feedback_old_price: Optional[float] = None
+    feedback_new_price: Optional[float] = None
     strategy: Optional[Dict] = None
 
 
@@ -131,37 +159,67 @@ async def get_alerts(status: Optional[str] = None, limit: int = 50):
     conn = get_db_connection()
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
+            base_query = """
+                SELECT 
+                    ca.*,
+                    COALESCE(ca.original_price, p.original_price) AS original_price,
+                    COALESCE(ca.promo_price, p.promo_price) AS promo_price,
+                    COALESCE(ca.discount_percentage, p.discount_percentage) AS discount_percentage
+                FROM cannibalization_alerts ca
+                LEFT JOIN promotions p ON ca.promo_id = p.promo_id
+            """
             if status:
-                cursor.execute("""
-                    SELECT * FROM cannibalization_alerts 
-                    WHERE status = %s 
-                    ORDER BY alert_timestamp DESC 
+                cursor.execute(
+                    base_query + """
+                    WHERE ca.status = %s
+                    ORDER BY ca.alert_timestamp DESC 
                     LIMIT %s
-                """, (status, limit))
+                    """,
+                    (status, limit)
+                )
             else:
-                # Prioritize showing alerts with strategies, then pending
-                cursor.execute("""
-                    SELECT * FROM cannibalization_alerts 
+                cursor.execute(
+                    base_query + """
                     ORDER BY 
                         CASE 
-                            WHEN status = 'strategy_generated' THEN 1
-                            WHEN status = 'pending' THEN 2
-                            WHEN status = 'action_taken' THEN 3
+                            WHEN ca.status = 'strategy_generated' THEN 1
+                            WHEN ca.status = 'pending' THEN 2
+                            WHEN ca.status = 'action_taken' THEN 3
                             ELSE 4
                         END,
-                        alert_timestamp DESC 
+                        ca.alert_timestamp DESC 
                     LIMIT %s
-                """, (limit,))
+                    """,
+                    (limit,)
+                )
             
             alerts = cursor.fetchall()
             
             for alert in alerts:
                 if 'alert_timestamp' in alert and alert['alert_timestamp']:
-                    alert['alert_timestamp'] = alert['alert_timestamp'].isoformat()
+                    ts = alert['alert_timestamp']
+                    if ts.tzinfo is None:
+                        ts = ts.replace(tzinfo=timezone.utc)
+                    alert['alert_timestamp'] = ts.isoformat()
+
+                if 'demo_queued_at' in alert and alert['demo_queued_at']:
+                    dq = alert['demo_queued_at']
+                    if hasattr(dq, "isoformat"):
+                        alert['demo_queued_at'] = dq.replace(tzinfo=timezone.utc).isoformat() if dq.tzinfo is None else dq.isoformat()
+                
+                # Normalize numeric fields that may be Decimals
+                for price_field in ['original_price', 'promo_price', 'discount_percentage', 'loss_amount', 'loss_percentage']:
+                    if price_field in alert and alert[price_field] is not None:
+                        try:
+                            alert[price_field] = float(alert[price_field])
+                        except Exception:
+                            pass
                 
                 strategy_json = redis_client.get(f"strategy:{alert['alert_id']}")
                 if strategy_json:
                     alert['strategy'] = json.loads(strategy_json)
+
+                alert = _attach_feedback(alert)
             
             return [dict(alert) for alert in alerts]
     finally:
@@ -174,8 +232,14 @@ async def get_alert(alert_id: str):
     try:
         with conn.cursor(cursor_factory=RealDictCursor) as cursor:
             cursor.execute("""
-                SELECT ca.*, s.explanation, s.recommended_action, s.alternative_actions, s.confidence_score
+                SELECT 
+                    ca.*,
+                    COALESCE(ca.original_price, p.original_price) AS original_price,
+                    COALESCE(ca.promo_price, p.promo_price) AS promo_price,
+                    COALESCE(ca.discount_percentage, p.discount_percentage) AS discount_percentage,
+                    s.explanation, s.recommended_action, s.alternative_actions, s.confidence_score
                 FROM cannibalization_alerts ca
+                LEFT JOIN promotions p ON ca.promo_id = p.promo_id
                 LEFT JOIN ai_strategies s ON ca.alert_id = s.alert_id
                 WHERE ca.alert_id = %s
             """, (alert_id,))
@@ -188,7 +252,22 @@ async def get_alert(alert_id: str):
             
             # Convert datetime to ISO string
             if 'alert_timestamp' in alert_dict and alert_dict['alert_timestamp']:
-                alert_dict['alert_timestamp'] = alert_dict['alert_timestamp'].isoformat()
+                ts = alert_dict['alert_timestamp']
+                if ts.tzinfo is None:
+                    ts = ts.replace(tzinfo=timezone.utc)
+                alert_dict['alert_timestamp'] = ts.isoformat()
+
+            if alert_dict.get('demo_queued_at'):
+                dq = alert_dict['demo_queued_at']
+                if hasattr(dq, "isoformat"):
+                    alert_dict['demo_queued_at'] = dq.replace(tzinfo=timezone.utc).isoformat() if dq.tzinfo is None else dq.isoformat()
+
+            for price_field in ['original_price', 'promo_price', 'discount_percentage', 'loss_amount', 'loss_percentage']:
+                if price_field in alert_dict and alert_dict[price_field] is not None:
+                    try:
+                        alert_dict[price_field] = float(alert_dict[price_field])
+                    except Exception:
+                        pass
             
             if alert_dict.get('recommended_action'):
                 recommended = alert_dict.pop('recommended_action')
@@ -199,10 +278,37 @@ async def get_alert(alert_id: str):
                     'alternatives': alternatives if isinstance(alternatives, list) else json.loads(alternatives),
                     'confidence_score': float(alert_dict.pop('confidence_score'))
                 }
+
+            alert_dict = _attach_feedback(alert_dict)
             
             return alert_dict
     finally:
         conn.close()
+
+
+@app.post("/internal/broadcast-alert")
+async def internal_broadcast_alert(payload: dict):
+    """
+    Internal hook for background services (e.g., gemini-agent) to fan out
+    freshly generated alerts/strategies to WebSocket clients.
+    """
+    await manager.broadcast({
+        "type": "new_alert",
+        "data": payload
+    })
+    return {"status": "ok"}
+
+
+@app.post("/internal/broadcast-feedback")
+async def internal_broadcast_feedback(payload: dict):
+    """
+    Internal hook for feedback-loop to publish measured impact to clients.
+    """
+    await manager.broadcast({
+        "type": "feedback",
+        "data": payload
+    })
+    return {"status": "ok"}
 
 
 @app.get("/promotions", response_model=List[PromotionResponse])
@@ -230,6 +336,7 @@ async def get_promotions(is_active: Optional[bool] = None):
 @app.post("/actions")
 async def create_user_action(action: UserActionRequest):
     action_id = f"ACTION-{uuid.uuid4().hex[:12]}"
+    now_ts = datetime.now(timezone.utc)
     
     conn = get_db_connection()
     try:
@@ -245,7 +352,7 @@ async def create_user_action(action: UserActionRequest):
                 action.action_type,
                 json.dumps(action.action_details) if action.action_details else None,
                 action.performed_by,
-                datetime.utcnow()
+                now_ts
             ))
             
             if action.action_type == "stop_promotion":
@@ -253,11 +360,11 @@ async def create_user_action(action: UserActionRequest):
                     UPDATE promotions 
                     SET is_active = false, updated_at = %s 
                     WHERE promo_id = %s
-                """, (datetime.utcnow(), action.promo_id))
+                """, (now_ts, action.promo_id))
             
             cursor.execute("""
                 UPDATE cannibalization_alerts 
-                SET status = 'resolved' 
+                SET status = 'action_taken' 
                 WHERE alert_id = %s
             """, (action.alert_id,))
             
@@ -268,8 +375,12 @@ async def create_user_action(action: UserActionRequest):
             'alert_id': action.alert_id,
             'promo_id': action.promo_id,
             'action_type': action.action_type,
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': now_ts.isoformat()
         }
+        # Forward any action details (e.g., new_price for adjust_price) to downstream processors
+        if action.action_details:
+            feedback_data.update(action.action_details)
+
         kafka_producer.send('user-actions', value=feedback_data)
         
         await manager.broadcast({

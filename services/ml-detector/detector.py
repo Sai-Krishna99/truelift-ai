@@ -196,6 +196,9 @@ class CannibalizationDetector:
             'promo_id': promo_id,
             'product_id': promo_data['product_id'],
             'product_name': promo_data['product_name'],
+            'original_price': promo_data.get('original_price'),
+            'promo_price': promo_data.get('promo_price'),
+            'discount_percentage': promo_data.get('discount_percentage'),
             'alert_timestamp': datetime.utcnow().replace(tzinfo=timezone.utc).isoformat(),
             'severity': 'high' if loss_data['loss_percentage'] > 40 else 'medium',
             **loss_data
@@ -213,14 +216,22 @@ class CannibalizationDetector:
             with conn.cursor() as cursor:
                 cursor.execute("""
                     INSERT INTO cannibalization_alerts 
-                    (alert_id, promo_id, product_id, product_name, actual_sales, predicted_sales, 
+                    (alert_id, promo_id, product_id, product_name, original_price, promo_price, discount_percentage,
+                     burst_id, demo_queued_at, burst_event_count,
+                     actual_sales, predicted_sales, 
                      sales_difference, loss_percentage, loss_amount, alert_timestamp, severity)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """, (
                     alert_data['alert_id'],
                     alert_data['promo_id'],
                     alert_data['product_id'],
                     alert_data['product_name'],
+                    alert_data.get('original_price'),
+                    alert_data.get('promo_price'),
+                    alert_data.get('discount_percentage'),
+                    alert_data.get('burst_id'),
+                    alert_data.get('demo_queued_at'),
+                    alert_data.get('burst_event_count'),
                     alert_data['actual_sales'],
                     alert_data['predicted_sales'],
                     alert_data['sales_difference'],
