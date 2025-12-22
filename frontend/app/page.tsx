@@ -174,13 +174,11 @@ export default function Home() {
       const ws = new WebSocket(WS_URL);
 
       ws.onopen = () => {
-        console.log('WebSocket connected');
         setWsConnected(true);
       };
 
       ws.onmessage = (event) => {
         const message = JSON.parse(event.data);
-        console.log('WebSocket message:', message);
 
         if (message.type === 'feedback') {
           const data = message.data || {};
@@ -236,7 +234,6 @@ export default function Home() {
       };
 
       ws.onclose = () => {
-        console.log('WebSocket closed, reconnecting...');
         setWsConnected(false);
         setTimeout(connectWebSocket, 5000);
       };
@@ -765,12 +762,12 @@ export default function Home() {
                         )}
                         {(alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null || actionImpacts[alert.alert_id]) && (
                           <span className={`px-2 py-1 text-xs font-semibold rounded border ${alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
-                              ? (alert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200')
-                              : actionImpacts[alert.alert_id]?.status === 'pending'
-                                ? 'bg-gray-100 text-gray-700 border-gray-200'
-                                : (actionImpacts[alert.alert_id]?.impact ?? 0) >= 0
-                                  ? 'bg-green-100 text-green-800 border-green-200'
-                                  : 'bg-red-100 text-red-800 border-red-200'
+                            ? (alert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border-green-200' : 'bg-red-100 text-red-800 border-red-200')
+                            : actionImpacts[alert.alert_id]?.status === 'pending'
+                              ? 'bg-gray-100 text-gray-700 border-gray-200'
+                              : (actionImpacts[alert.alert_id]?.impact ?? 0) >= 0
+                                ? 'bg-green-100 text-green-800 border-green-200'
+                                : 'bg-red-100 text-red-800 border-red-200'
                             }`}>
                             {alert.feedback_effectiveness !== undefined && alert.feedback_effectiveness !== null
                               ? renderImpactBadgeText(alert)
@@ -786,7 +783,7 @@ export default function Home() {
                           }`}>
                           {alert.status.replace('_', ' ').toUpperCase()}
                         </span>
-                  </div>
+                      </div>
 
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-3">
                         <div>
@@ -868,12 +865,12 @@ export default function Home() {
                 </span>
                 {(selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null) || actionImpacts[selectedAlert.alert_id] ? (
                   <span className={`px-3 py-1 text-xs font-semibold rounded-full ${selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
-                      ? (selectedAlert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200')
-                      : actionImpacts[selectedAlert.alert_id]?.status === 'pending'
-                        ? 'bg-gray-100 text-gray-700 border border-gray-200'
-                        : (actionImpacts[selectedAlert.alert_id]?.impact ?? 0) >= 0
-                          ? 'bg-green-100 text-green-800 border border-green-200'
-                          : 'bg-red-100 text-red-800 border border-red-200'
+                    ? (selectedAlert.feedback_effectiveness >= 0 ? 'bg-green-100 text-green-800 border border-green-200' : 'bg-red-100 text-red-800 border border-red-200')
+                    : actionImpacts[selectedAlert.alert_id]?.status === 'pending'
+                      ? 'bg-gray-100 text-gray-700 border border-gray-200'
+                      : (actionImpacts[selectedAlert.alert_id]?.impact ?? 0) >= 0
+                        ? 'bg-green-100 text-green-800 border border-green-200'
+                        : 'bg-red-100 text-red-800 border border-red-200'
                     }`}>
                     {selectedAlert.feedback_effectiveness !== undefined && selectedAlert.feedback_effectiveness !== null
                       ? renderImpactBadgeText(selectedAlert)
