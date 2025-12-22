@@ -44,31 +44,31 @@ gcloud projects add-iam-policy-binding $PROJECT_ID \
   --condition=None > /dev/null
 
 # Create secrets for sensitive data
-echo "🔐 Creating secrets..."
-if ! gcloud secrets describe gemini-api-key --project=$PROJECT_ID &>/dev/null; then
-  echo -n "$GEMINI_API_KEY" | gcloud secrets create gemini-api-key \
-    --data-file=- \
-    --replication-policy="automatic"
-fi
+echo "🔐 Synchronizing secrets..."
+# Helper to create or update secret
+sync_secret() {
+  local name=$1
+  local value=$2
+  if gcloud secrets describe "$name" --project=$PROJECT_ID &>/dev/null; then
+    echo -n "$value" | gcloud secrets versions add "$name" --data-file=- >/dev/null
+    echo "  ✅ Updated $name"
+  else
+    echo -n "$value" | gcloud secrets create "$name" --data-file=- --replication-policy="automatic" >/dev/null
+    echo "  ✅ Created $name"
+  fi
+}
 
-if ! gcloud secrets describe postgres-password --project=$PROJECT_ID &>/dev/null; then
-  echo -n "$POSTGRES_PASSWORD" | gcloud secrets create postgres-password \
-    --data-file=- \
-    --replication-policy="automatic"
-fi
+sync_secret "gemini-api-key" "$GEMINI_API_KEY"
+sync_secret "postgres-password" "$POSTGRES_PASSWORD"
 
 # Kafka Secrets
 if [ -n "$KAFKA_SASL_USERNAME" ]; then
-    if ! gcloud secrets describe kafka-sasl-username --project=$PROJECT_ID &>/dev/null; then
-      echo -n "$KAFKA_SASL_USERNAME" | gcloud secrets create kafka-sasl-username --data-file=- --replication-policy="automatic"
-    fi
-    if ! gcloud secrets describe kafka-sasl-password --project=$PROJECT_ID &>/dev/null; then
-      echo -n "$KAFKA_SASL_PASSWORD" | gcloud secrets create kafka-sasl-password --data-file=- --replication-policy="automatic"
-    fi
+    sync_secret "kafka-sasl-username" "$KAFKA_SASL_USERNAME"
+    sync_secret "kafka-sasl-password" "$KAFKA_SASL_PASSWORD"
     KAFKA_SECRETS_ARGS="--set-secrets=KAFKA_SASL_USERNAME=kafka-sasl-username:latest,KAFKA_SASL_PASSWORD=kafka-sasl-password:latest"
     KAFKA_ENV_ARGS="KAFKA_SECURITY_PROTOCOL=${KAFKA_SECURITY_PROTOCOL:-SASL_SSL}"
 else
-    echo "⚠️  No Kafka credentials provided (KAFKA_SASL_USERNAME). Assuming plaintext/local or previously set secrets."
+    echo "⚠️  No Kafka credentials provided (KAFKA_SASL_USERNAME). Skipping Kafka secrets."
     KAFKA_SECRETS_ARGS=""
     KAFKA_ENV_ARGS="KAFKA_SECURITY_PROTOCOL=PLAINTEXT"
 fi
