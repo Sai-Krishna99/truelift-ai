@@ -459,10 +459,9 @@ async def get_dashboard_stats():
                     COUNT(*) as total_alerts,
                     COUNT(CASE WHEN status = 'pending' THEN 1 END) as pending_alerts,
                     COUNT(CASE WHEN status = 'resolved' THEN 1 END) as resolved_alerts,
-                    SUM(loss_amount) as total_loss,
-                    AVG(loss_percentage) as avg_loss_percentage
+                    COALESCE(SUM(loss_amount), 0) as total_loss,
+                    COALESCE(AVG(loss_percentage), 0) as avg_loss_percentage
                 FROM cannibalization_alerts
-                WHERE DATE(alert_timestamp) = CURRENT_DATE
             """)
             alerts_stats = dict(cursor.fetchone())
 

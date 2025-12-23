@@ -580,40 +580,7 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-4">
-        <div className="bg-purple-50 border border-purple-200 rounded-lg p-4 shadow-sm">
-          <p className="text-sm font-semibold text-purple-900 mb-3">📋 Action Legend - What Each Action Does</p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-red-100 rounded-full flex items-center justify-center">
-                <XCircle className="w-5 h-5 text-red-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-purple-900">Stop Promotion</p>
-                <p className="text-xs text-purple-700 mt-1">
-                  Immediately halts the promotion and reverts to original pricing. Use when cannibalization is severe and promotion is unprofitable.
-                </p>
-              </div>
-            </div>
-            <div className="flex items-start gap-3">
-              <div className="flex-shrink-0 w-8 h-8 bg-blue-100 rounded-full flex items-center justify-center">
-                <DollarSign className="w-5 h-5 text-blue-600" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-purple-900">Adjust Price</p>
-                <p className="text-xs text-purple-700 mt-1">
-                  Modifies the promotional price to find optimal balance. Increase price to reduce cannibalization or decrease to boost volume.
-                </p>
-              </div>
-            </div>
-          </div>
-          <div className="mt-3 pt-3 border-t border-purple-200">
-            <p className="text-xs text-purple-600">
-              💡 <strong>Tip:</strong> After taking action, the system measures effectiveness in real-time and displays impact metrics (sales change, revenue impact).
-            </p>
-          </div>
-        </div>
-      </div>
+
 
       {demoResult && (
         <div className={`mx-auto max-w-7xl px-4 sm:px-6 lg:px-8 mt-3`}>
